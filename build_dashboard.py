@@ -150,6 +150,46 @@ def ejecutivas_kpis_html(incidentes):
 """
 
 
+def explica_panel(columnas):
+    """Panel de explicación en 2-3 columnas, para reemplazar los párrafos
+    largos de una sola columna que traía el reporte (pedido de Jorge,
+    2026-09-02: "hazlo mucho más simple y usa todo el ancho... separando en
+    2 o 3 columnas"). `columnas` es una lista de (icono_emoji, titulo,
+    html_contenido) -- cada una se ve como una tarjeta corta con su propio
+    tema, en vez de un bloque de texto corrido explicando 3 cosas
+    distintas seguidas."""
+    celdas = "".join(
+        f'<div class="explica-col"><div class="ec-ico">{ico}</div>'
+        f"<h4>{titulo}</h4><div class=\"ec-txt\">{contenido}</div></div>"
+        for ico, titulo, contenido in columnas
+    )
+    return f'<div class="explica">{celdas}</div>'
+
+
+def explica_diagrama(pasos):
+    """Diagrama de flujo simple (cajas + flechas) para ilustrar un proceso
+    de pocos pasos en vez de describirlo solo en texto -- ej. "guías
+    originales -> bodega arma el bulto -> guía-bulto nueva". `pasos` es una
+    lista de dicts: {"titulo", "sub" (opcional), "tag" (opcional, texto
+    corto), "variante" ('off'|'proc'|'on', define el color del tag/borde)}.
+    """
+    color = {"off": "var(--bad)", "proc": "var(--ink-faint)", "on": "var(--good)"}
+    partes = []
+    for i, p in enumerate(pasos):
+        if i > 0:
+            partes.append('<div class="ed-arrow">&#8594;</div>')
+        c = color.get(p.get("variante"), "var(--ink-faint)")
+        tag_html = (
+            f'<div class="ed-tag" style="color:{c};border-color:{c}">{p["tag"]}</div>'
+            if p.get("tag") else ""
+        )
+        sub_html = f'<div class="ed-sub">{p["sub"]}</div>' if p.get("sub") else ""
+        partes.append(
+            f'<div class="ed-box"><div class="ed-label">{p["titulo"]}</div>{sub_html}{tag_html}</div>'
+        )
+    return f'<div class="explica-diagrama">{"".join(partes)}</div>'
+
+
 def barra_capacidad_svg(items, label_fn, key_ingreso, key_podria, width=980, height=260, bar_gap=6):
     """Grafico de barras superpuestas: 'podria' (potencial, claro, atras)
     vs 'ingreso' (real, solido, adelante, mas angosta) -- ambas ancladas
@@ -318,18 +358,27 @@ def build_capacidad_vuelos():
     <button onclick="capLimpiarFiltroFechas()">Limpiar</button>
   </div>
 
-  <p class="sub">
-    Para cada vuelo regular (excluye vuelos de 1 sola guía = carga), cuántas guías
-    efectivamente entraron ("ingresado" — el tope real, la restricción que impuso la aerolínea
-    ese vuelo) vs cuántas guías YA listas para volar (pago + factura en Miami) había
-    disponibles justo antes de que saliera ("podría haber ingresado" — la demanda real, incluye
-    tanto a las que sí abordaron como a las que quedaron esperando uno posterior). El 100% de
-    la capacidad es lo que efectivamente voló; todo lo que no alcanzó a subir es
-    <b>excedente</b> de demanda, no capacidad desperdiciada. A nivel semanal, "podría" se mide
-    una sola vez por semana (no se suma entre vuelos de la misma semana, para no contar dos
-    veces la misma guía esperando). El filtro de fecha de arriba recalcula estos KPIs y las 3
-    tablas de detalle (no los gráficos, que se quedan con el año completo como contexto).
-  </p>
+  {explica_panel([
+      (
+          "✈️", "\"Ingresó\" = 100% de capacidad",
+          "Cuántas guías efectivamente subieron a ese vuelo. Es el tope real — la "
+          "restricción que impuso la aerolínea ese día puntual.",
+      ),
+      (
+          "⏳", "\"Podría\" = demanda real",
+          "Cuántas guías YA listas para volar (pago + factura) había disponibles justo "
+          "antes de que saliera el vuelo — incluye tanto a las que sí abordaron como a "
+          "las que quedaron esperando uno posterior. A nivel semanal se mide 1 sola vez "
+          "por semana (no se suma entre vuelos, para no contar dos veces a la misma guía "
+          "esperando).",
+      ),
+      (
+          "📈", "\"Excedente\" = demanda sin subir",
+          "Todo lo que no alcanzó a subir. <b>No</b> es capacidad desperdiciada — es "
+          "demanda que superó el cupo del vuelo. El filtro de fecha de arriba recalcula "
+          "estos KPIs y las 3 tablas (no los gráficos, que quedan con el año completo).",
+      ),
+  ])}
 
   <div class="kpis">
     <div class="kpi"><div class="v" id="cap-kpi-ingreso">{fmt_n(total_ingreso)}</div><div class="l">Total guías ingresadas</div></div>
@@ -872,7 +921,13 @@ def build_wrapper_subtabs(dom_id_base, contenido_estricto, contenido_semana, not
     opcionalmente 'neto') en un sub-toggle propio, para usar dentro de una
     pestaña principal que no es 'estricto'/'semana' directamente (ej. la
     pestaña Consolidadas). Si contenido_neto es None, solo 2 sub-toggles
-    (comportamiento original, usado por la pestaña Individuales)."""
+    (comportamiento original, usado por la pestaña Individuales).
+
+    nota_arriba va SIN envolver en <p class="sub"> (a diferencia de antes,
+    2026-09-02) -- quien llama decide el envoltorio: texto plano corto sigue
+    pasando su propio <p class="sub">...</p>, pero ahora también se puede
+    pasar el HTML de explica_panel()/explica_diagrama() (columnas/diagrama),
+    que rompería semánticamente metido dentro de un <p> (son <div>)."""
     btn_neto = (
         f'<button id="subtab-btn-{dom_id_base}-neto" onclick="verSubtab(\'{dom_id_base}\',\'neto\')">{label_neto}</button>'
         if contenido_neto is not None else ""
@@ -882,7 +937,7 @@ def build_wrapper_subtabs(dom_id_base, contenido_estricto, contenido_semana, not
         if contenido_neto is not None else ""
     )
     return f"""
-  <p class="sub">{nota_arriba}</p>
+  {nota_arriba}
   <div class="toggle" style="margin-bottom:18px">
     <button id="subtab-btn-{dom_id_base}-estricto" class="active" onclick="verSubtab('{dom_id_base}','estricto')">Vuelo exacto</button>
     <button id="subtab-btn-{dom_id_base}-semana" onclick="verSubtab('{dom_id_base}','semana')">Misma semana</button>
@@ -1087,12 +1142,8 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     return f"""
   <p class="sub">
     Detalle guía a guía de las {fmt_n(len(filas))} guías afectadas en 2026 bajo el criterio
-    "{titulo_bloque}" — esta cifra es exactamente la suma de las guías individuales +
-    consolidadas afectadas (misma población, sin filtrar por una u otra; puedes confirmarlo
-    filtrando por "Población" abajo). Filtra por fecha, ejecutiva, convenio, y — para las
-    guías-bulto de consolidación — por <b>tamaño</b> (cuántas guías originales se fundieron) y
-    <b>señal de fricción</b> del proceso de consolidación (factura pendiente al cerrar el bulto
-    / armado lento). Los KPIs y la tabla se recalculan solos.
+    "{titulo_bloque}". Filtra por fecha, ejecutiva, convenio, población, tamaño de
+    consolidación o señal de fricción a la izquierda — los KPIs y la tabla se recalculan solos.
   </p>
 
   <div class="ga-layout" id="ga-wrap-{sfx}">
@@ -1289,9 +1340,26 @@ seccion_guias_afectadas = build_wrapper_subtabs(
     "guiasaf",
     seccion_ga_estricto,
     seccion_ga_semana,
-    "Elige el criterio con el que se mide si una guía quedó afectada: \"vuelo exacto\" (no "
-    "subió al vuelo puntual que le correspondía) o \"misma semana\" (más permisivo -- no "
-    "cuenta como afectada si voló en otro vuelo de la misma semana calendario).",
+    explica_panel([
+        (
+            "🎯", "Vuelo exacto",
+            "No cuenta como afectada si subió exactamente al vuelo puntual que le "
+            "correspondía. Cualquier otro vuelo posterior (aunque sea el siguiente) cuenta "
+            "como afectada.",
+        ),
+        (
+            "📅", "Misma semana",
+            "Más permisivo: no cuenta como afectada si voló en OTRO vuelo dentro de la "
+            "misma semana calendario. Solo cuenta si voló en una semana posterior, o si "
+            "nunca voló.",
+        ),
+        (
+            "➕", "Es la suma de las 2 pestañas",
+            "Esta tabla junta individuales + consolidadas — el total siempre coincide con "
+            "sumar Individuales y Consolidadas por separado (puedes comprobarlo con el "
+            "filtro \"Población\").",
+        ),
+    ]),
 )
 
 seccion_estricto = build_seccion(
@@ -1315,11 +1383,24 @@ seccion_individuales = build_wrapper_subtabs(
     "indiv",
     seccion_estricto,
     seccion_semana,
-    "Guías INDIVIDUALES: quedaron listas para volar (pago + factura en Miami) de forma "
-    "independiente — no son producto de fundir varios paquetes en un bulto (eso son las "
-    "guías <b>consolidadas</b>, con su propia pestaña aparte). Excluye guías de carga (vuelos "
-    "de 1 sola guía) y guías que nunca completaron pago+factura. Elige el criterio con el que "
-    "se mide si una guía quedó afectada.",
+    explica_panel([
+        (
+            "📄", "¿Qué son?",
+            "Guías que quedaron listas para volar (pago + factura en Miami) de forma "
+            "independiente — no son producto de fundir varios paquetes en un bulto (eso son "
+            "las guías <b>consolidadas</b>, con su propia pestaña).",
+        ),
+        (
+            "🚫", "¿Qué se excluye?",
+            "Guías de carga (vuelos dedicados a 1 sola guía) y guías que nunca completaron "
+            "pago + factura — nunca llegaron a tener un vuelo que les correspondiera.",
+        ),
+        (
+            "🎯", "Elige el criterio",
+            "\"Vuelo exacto\" o \"misma semana\" — botones arriba. Mide qué tan estricto es "
+            "el corte para considerar que una guía quedó afectada.",
+        ),
+    ]),
 )
 seccion_cons_estricto = build_seccion(
     "estricto",
@@ -1356,21 +1437,33 @@ seccion_consolidadas = build_wrapper_subtabs(
     "cons",
     seccion_cons_estricto,
     seccion_cons_semana,
-    "Estas NO son las guías originales que el cliente compró — esas (estado \"Consolidado\") "
-    "ni siquiera entran a este análisis, porque nunca tienen su propio pago ni factura. Son la "
-    "guía NUEVA que arma bodega al fundir varios paquetes originales en un solo bulto para "
-    "ahorrar flete (<code>guia_hijas.consolidacion &gt; 0</code>) — esa guía-bulto sí pasa por "
-    "pago, factura y vuelo como cualquier otra, así que se evalúa igual, pero por separado. "
-    "<br><br>El proceso de consolidación se opera por correo entre la ejecutiva (Chile) y "
-    "bodega (Miami) — el armado del bulto depende caso a caso del pago de las guías, el tipo "
-    "de consolidación, la cantidad de cajas, el tope FOB por bulto y los tiempos de espera de "
-    "facturas; esa cadena de correo (4-8 personas en copia) fija cuándo la guía-bulto queda "
-    "\"lista para volar\". Esa fricción es real operativamente, pero <b>tras corregir el corte "
-    "de manifiesto, ya no se traduce en que las guías-bulto no vuelen a tiempo más que las "
-    "individuales</b> (tasas casi iguales — ver Conclusiones punto 3). El criterio "
-    "<b>\"neto de consolidación\"</b> resta el único efecto que los datos aíslan con "
-    "confianza: las guías-bulto cerradas con factura pendiente. Detalle del correo en "
-    "<code>CONSOLIDACIONES_CORREO.md</code>.",
+    explica_diagrama([
+        {"titulo": "Guías originales", "sub": 'estado "Consolidado"', "tag": "NO se evalúan", "variante": "off"},
+        {"titulo": "Bodega arma el bulto", "sub": "correo Chile ↔ Miami", "variante": "proc"},
+        {"titulo": "Guía-bulto NUEVA", "sub": "guia_hijas.consolidacion > 0", "tag": "SÍ se evalúa", "variante": "on"},
+    ]) + explica_panel([
+        (
+            "📦", "¿Qué es?",
+            "Las guías originales que el cliente compró NUNCA entran a este análisis (no "
+            "tienen su propio pago/factura). Lo que se evalúa es la guía-bulto NUEVA que "
+            "arma bodega al fundir varios paquetes en 1 para ahorrar flete — esa sí pasa "
+            "por pago, factura y vuelo, igual que cualquier otra guía.",
+        ),
+        (
+            "✉️", "¿Cómo se arma?",
+            "Por correo entre la ejecutiva (Chile) y bodega (Miami) — depende del pago, "
+            "tipo de consolidación, cantidad de cajas, tope FOB y tiempos de espera de "
+            "facturas (cadena de 4-8 personas). Detalle en "
+            "<code>CONSOLIDACIONES_CORREO.md</code>.",
+        ),
+        (
+            "✅", "¿Qué resta \"Neto\"?",
+            "Esa fricción es real, pero tras corregir el corte de manifiesto <b>ya NO se "
+            "traduce en que las guías-bulto vuelen peor que las individuales</b> (tasas "
+            "casi iguales — ver Conclusiones punto 3). \"Neto\" resta el único efecto que "
+            "los datos aíslan con confianza: bultos cerrados con factura pendiente.",
+        ),
+    ]),
     contenido_neto=seccion_cons_neto,
     label_neto="Neto de consolidación",
 )
@@ -1417,6 +1510,30 @@ HTML = f"""<!DOCTYPE html>
   h1 {{ font-family: 'Russo One', system-ui, sans-serif; font-weight: 400; font-size: 20px; margin: 0 0 6px; }}
   h2 {{ font-family: 'Russo One', system-ui, sans-serif; font-weight: 400; font-size: 14px; margin: 0 0 12px; letter-spacing: .02em; }}
   p.sub {{ font-size: 12.5px; color: var(--ink-faint); line-height: 1.6; margin: 0 0 22px; max-width: 780px; }}
+  .explica {{
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px 28px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 16px;
+    padding: 20px 26px; margin-bottom: 20px;
+  }}
+  .explica-col {{ display: flex; flex-direction: column; gap: 6px; }}
+  .explica-col .ec-ico {{ font-size: 22px; line-height: 1; }}
+  .explica-col h4 {{ font-size: 12.5px; margin: 0; color: var(--ink); font-family: 'Fira Sans', sans-serif; font-weight: 700; }}
+  .explica-col .ec-txt {{ font-size: 12px; color: var(--ink-faint); line-height: 1.65; }}
+  .explica-col .ec-txt code {{ font-size: 10.5px; }}
+  .explica-diagrama {{ display: flex; align-items: stretch; flex-wrap: wrap; gap: 8px 4px; margin: 2px 0 18px; }}
+  .ed-box {{
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px;
+    padding: 10px 16px; min-width: 150px; text-align: center; flex: 1 1 150px;
+    display: flex; flex-direction: column; justify-content: center; gap: 3px;
+  }}
+  .ed-label {{ font-size: 12px; font-weight: 700; color: var(--ink); }}
+  .ed-sub {{ font-size: 10px; color: var(--ink-faint); }}
+  .ed-tag {{
+    display: inline-block; margin: 3px auto 0; font-size: 9.5px; font-weight: 700;
+    padding: 2px 9px; border-radius: 20px; border: 1px solid; width: fit-content;
+  }}
+  .ed-arrow {{ display: flex; align-items: center; justify-content: center; font-size: 18px; color: var(--ink-faint); flex: 0 0 auto; padding: 0 2px; }}
+  @media (max-width: 640px) {{ .ed-arrow {{ transform: rotate(90deg); }} }}
   .kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 26px; }}
   .kpi {{ background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }}
   .kpi .v {{ font-family: 'Russo One', system-ui, sans-serif; font-size: 22px; }}
