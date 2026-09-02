@@ -913,8 +913,8 @@ def main():
             d for d in detalle if d["consolidada"] == poblacion_filtro
         ]
         incidentes = [d for d in base if d[flag_key]]
-        semanas = defaultdict(lambda: {"evaluables": 0, "incidentes": 0, "kilos": 0.0, "_casillas": set()})
-        meses = defaultdict(lambda: {"evaluables": 0, "incidentes": 0, "kilos": 0.0, "_casillas": set()})
+        semanas = defaultdict(lambda: {"evaluables": 0, "incidentes": 0, "kilos": 0.0, "kilos_evaluables": 0.0, "_casillas": set()})
+        meses = defaultdict(lambda: {"evaluables": 0, "incidentes": 0, "kilos": 0.0, "kilos_evaluables": 0.0, "_casillas": set()})
         # split individuales/consolidadas por mes, solo evaluables+incidentes+pct
         # (soporta la conclusion "la consolidacion no explica el patron
         # abril-junio" -- ver docstring)
@@ -930,7 +930,9 @@ def main():
             wk_key = lunes_de_semana(esperado).isoformat()
             mo_key = f"{esperado.year}-{esperado.month:02d}"
             semanas[wk_key]["evaluables"] += 1
+            semanas[wk_key]["kilos_evaluables"] += d["peso"] or 0
             meses[mo_key]["evaluables"] += 1
+            meses[mo_key]["kilos_evaluables"] += d["peso"] or 0
             pob_key = "consolidadas" if d["consolidada"] else "individuales"
             poblacion_por_mes[mo_key][pob_key]["evaluables"] += 1
             if d[flag_key]:
@@ -950,6 +952,8 @@ def main():
                     "incidentes": v["incidentes"],
                     "pct": round(v["incidentes"] / v["evaluables"] * 100, 1) if v["evaluables"] else 0,
                     "kilos": round(v["kilos"], 1),
+                    "kilos_evaluables": round(v["kilos_evaluables"], 1),
+                    "pct_kilos": round(v["kilos"] / v["kilos_evaluables"] * 100, 1) if v["kilos_evaluables"] else 0,
                     "clientes": len(v["_casillas"]),
                 }
             return out

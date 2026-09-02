@@ -116,6 +116,7 @@ def tabla_html(items, label_fn, semanal):
             f"<td data-v='{v['incidentes']}'>{fmt_n(v['incidentes'])}</td>"
             f"<td data-v='{v['pct']}' style='color:{color_por_pct(v['pct'])};font-weight:700'>{fmt_pct(v['pct'])}</td>"
             f"<td data-v='{v['kilos']}'>{fmt_kg(v['kilos'])}</td>"
+            f"<td data-v='{v['pct_kilos']}' style='color:{color_por_pct(v['pct_kilos'])};font-weight:700'>{fmt_pct(v['pct_kilos'])}</td>"
             f"<td data-v='{v['clientes']}'>{fmt_n(v['clientes'])}</td></tr>"
         )
     return "\n".join(rows)
@@ -563,7 +564,8 @@ def build_seccion(scope, titulo_bloque, subtitulo_bloque, poblacion=None, univer
           <th onclick="ordenarTabla('tabla-{dom_id}-semanal',3,'num')">Afectadas</th>
           <th onclick="ordenarTabla('tabla-{dom_id}-semanal',4,'num')">%</th>
           <th onclick="ordenarTabla('tabla-{dom_id}-semanal',5,'num')">Kilos</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-semanal',6,'num')">Clientes</th>
+          <th onclick="ordenarTabla('tabla-{dom_id}-semanal',6,'num')">% Kilos</th>
+          <th onclick="ordenarTabla('tabla-{dom_id}-semanal',7,'num')">Clientes</th>
         </tr></thead>
         <tbody>{tabla_semanal}</tbody></table>
       </div>
@@ -574,7 +576,8 @@ def build_seccion(scope, titulo_bloque, subtitulo_bloque, poblacion=None, univer
           <th onclick="ordenarTabla('tabla-{dom_id}-mensual',2,'num')">Afectadas</th>
           <th onclick="ordenarTabla('tabla-{dom_id}-mensual',3,'num')">%</th>
           <th onclick="ordenarTabla('tabla-{dom_id}-mensual',4,'num')">Kilos</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-mensual',5,'num')">Clientes</th>
+          <th onclick="ordenarTabla('tabla-{dom_id}-mensual',5,'num')">% Kilos</th>
+          <th onclick="ordenarTabla('tabla-{dom_id}-mensual',6,'num')">Clientes</th>
         </tr></thead>
         <tbody>{tabla_mensual}</tbody></table>
       </div>
@@ -891,14 +894,27 @@ def build_wrapper_subtabs(dom_id_base, contenido_estricto, contenido_semana, not
 """
 
 
-def build_guias_afectadas():
+def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id=None):
     """Pestaña "Guías afectadas": tabla completa guía a guía (todas las
-    afectadas, individuales + consolidadas, criterio "vuelo exacto"),
-    filtrable por mes y por código de convenio (selección múltiple,
-    incluye atajos Kathy/Tiare), con KPIs resumen que se recalculan según
-    los filtros activos. Renderizado 100% en el cliente (JS) a partir de un
-    array embebido -- 1000+ filas, liviano de sobra para eso."""
-    inc = data["estricto"]["detalle_incidentes"]
+    afectadas, individuales + consolidadas -- data[scope] ya es la suma
+    exacta de individuales+consolidadas para ese criterio, ver
+    bloque_definicion() en el extractor: es la misma poblacion sin filtrar,
+    asi que el total SIEMPRE coincide con sumar las dos pestañas separadas),
+    filtrable por mes, ejecutiva, convenio, población, tamaño de
+    consolidación y señal de fricción, con KPIs resumen que se recalculan
+    según los filtros activos. Renderizado 100% en el cliente (JS) a partir
+    de un array embebido -- 1000+ filas, liviano de sobra para eso.
+
+    scope = 'estricto' | 'semana' -- pedido de Jorge (2026-09-02): antes esta
+    pestaña solo mostraba "vuelo exacto" (con una nota redirigiendo a
+    Conclusiones para "misma semana", que no tenía el detalle completo).
+    Ahora se llama dos veces (una por scope) y se envuelven con
+    build_wrapper_subtabs(), igual que Individuales/Consolidadas. dom_id
+    (por defecto = scope) sufija TODOS los ids y nombres de función/variable
+    JS generados acá -- obligatorio pasarlo distinto en cada llamada o los
+    dos <script> quedan pisándose variables globales del mismo nombre."""
+    sfx = dom_id or scope
+    inc = data[scope]["detalle_incidentes"]
 
     def clasificar_ejecutiva(conv):
         if conv in KATHY_CONVENIOS:
@@ -1057,12 +1073,12 @@ def build_guias_afectadas():
     def filtro_card_head(titulo, grupo):
         return (
             '<div class="filtro-card-head">'
-            f'<div class="filtro-card-title" onclick="gaToggleCard(this)">'
+            f'<div class="filtro-card-title" onclick="gaToggleCard_{sfx}(this)">'
             '<span class="filtro-chevron">&#9662;</span>'
             f'<h3>{titulo}</h3></div>'
             '<div class="filtro-acciones">'
-            f'<button onclick="gaSeleccionar(\'{grupo}\',\'todos\')">Todos</button>'
-            f'<button onclick="gaSeleccionar(\'{grupo}\',\'ninguno\')">Ninguno</button>'
+            f'<button onclick="gaSeleccionar_{sfx}(\'{grupo}\',\'todos\')">Todos</button>'
+            f'<button onclick="gaSeleccionar_{sfx}(\'{grupo}\',\'ninguno\')">Ninguno</button>'
             "</div></div>"
         )
 
@@ -1070,15 +1086,16 @@ def build_guias_afectadas():
 
     return f"""
   <p class="sub">
-    Detalle guía a guía de las {fmt_n(len(filas))} guías afectadas en 2026 (individuales +
-    consolidadas, criterio "vuelo exacto" — ver pestaña Conclusiones para "misma semana").
-    Filtra por fecha, ejecutiva, convenio, y — para las guías-bulto de consolidación — por
-    <b>tamaño</b> (cuántas guías originales se fundieron) y <b>señal de fricción</b> del
-    proceso de consolidación (factura pendiente al cerrar el bulto / armado lento). Los KPIs y
-    la tabla se recalculan solos.
+    Detalle guía a guía de las {fmt_n(len(filas))} guías afectadas en 2026 bajo el criterio
+    "{titulo_bloque}" — esta cifra es exactamente la suma de las guías individuales +
+    consolidadas afectadas (misma población, sin filtrar por una u otra; puedes confirmarlo
+    filtrando por "Población" abajo). Filtra por fecha, ejecutiva, convenio, y — para las
+    guías-bulto de consolidación — por <b>tamaño</b> (cuántas guías originales se fundieron) y
+    <b>señal de fricción</b> del proceso de consolidación (factura pendiente al cerrar el bulto
+    / armado lento). Los KPIs y la tabla se recalculan solos.
   </p>
 
-  <div class="ga-layout">
+  <div class="ga-layout" id="ga-wrap-{sfx}">
     <aside class="ga-sidebar">
       <div class="filtro-card">
         {filtro_card_head("Fechas", "mes")}
@@ -1111,37 +1128,39 @@ def build_guias_afectadas():
     </aside>
 
     <div class="ga-content">
-      <div class="kpis" id="ga-kpis">
-        <div class="kpi bad"><div class="v" id="ga-kpi-pct">100%</div><div class="l">% del total de afectadas</div></div>
-        <div class="kpi"><div class="v" id="ga-kpi-n">{fmt_n(len(filas))}</div><div class="l">Guías (con este filtro)</div></div>
-        <div class="kpi"><div class="v" id="ga-kpi-kg">0 kg</div><div class="l">Kilos</div></div>
-        <div class="kpi"><div class="v" id="ga-kpi-clientes">0</div><div class="l">Clientes únicos</div></div>
+      <div class="kpis" id="ga-kpis-{sfx}">
+        <div class="kpi bad"><div class="v" id="ga-kpi-pct-{sfx}">100%</div><div class="l">% del total de afectadas</div></div>
+        <div class="kpi"><div class="v" id="ga-kpi-n-{sfx}">{fmt_n(len(filas))}</div><div class="l">Guías (con este filtro)</div></div>
+        <div class="kpi"><div class="v" id="ga-kpi-kg-{sfx}">0 kg</div><div class="l">Kilos</div></div>
+        <div class="kpi"><div class="v" id="ga-kpi-clientes-{sfx}">0</div><div class="l">Clientes únicos</div></div>
       </div>
 
       <div class="table-wrap" style="max-height:520px">
-        <table id="tabla-guias-afectadas" class="sortable">
+        <table id="tabla-guias-afectadas-{sfx}" class="sortable">
           <thead><tr>
-            <th onclick="gaOrdenar(0)">N° Guía</th>
-            <th onclick="gaOrdenar(1)">Mes</th>
-            <th onclick="gaOrdenar(2)">Convenio</th>
-            <th onclick="gaOrdenar(3)">Casilla</th>
-            <th onclick="gaOrdenar(4)">Población</th>
-            <th onclick="gaOrdenar(5)">Consol. (n° guías)</th>
-            <th onclick="gaOrdenar(6)">Señal fricción</th>
-            <th onclick="gaOrdenar(7)">Kilos</th>
-            <th onclick="gaOrdenar(8)">Vuelo esperado</th>
-            <th onclick="gaOrdenar(9)">N° vuelo / AWB</th>
-            <th onclick="gaOrdenar(10)">Vuelo real</th>
-            <th onclick="gaOrdenar(11)">Motivo</th>
+            <th onclick="gaOrdenar_{sfx}(0)">N° Guía</th>
+            <th onclick="gaOrdenar_{sfx}(1)">Mes</th>
+            <th onclick="gaOrdenar_{sfx}(2)">Convenio</th>
+            <th onclick="gaOrdenar_{sfx}(3)">Casilla</th>
+            <th onclick="gaOrdenar_{sfx}(4)">Población</th>
+            <th onclick="gaOrdenar_{sfx}(5)">Consol. (n° guías)</th>
+            <th onclick="gaOrdenar_{sfx}(6)">Señal fricción</th>
+            <th onclick="gaOrdenar_{sfx}(7)">Kilos</th>
+            <th onclick="gaOrdenar_{sfx}(8)">Vuelo esperado</th>
+            <th onclick="gaOrdenar_{sfx}(9)">N° vuelo / AWB</th>
+            <th onclick="gaOrdenar_{sfx}(10)">Vuelo real</th>
+            <th onclick="gaOrdenar_{sfx}(11)">Motivo</th>
           </tr></thead>
-          <tbody id="ga-tbody"></tbody>
+          <tbody id="ga-tbody-{sfx}"></tbody>
         </table>
       </div>
-      <p class="empty-note" id="ga-empty" style="display:none">Sin guías para este filtro.</p>
+      <p class="empty-note" id="ga-empty-{sfx}" style="display:none">Sin guías para este filtro.</p>
     </div>
   </div>
 
   <script>
+  (function () {{
+    var WRAP = '#ga-wrap-{sfx} ';
     var GA_DATOS = {datos_json};
     var GA_MESES_LABEL = {json.dumps({mo: mes_label(mo) for mo in meses_presentes}, ensure_ascii=False)};
     var GA_TOTAL = GA_DATOS.length;
@@ -1162,7 +1181,7 @@ def build_guias_afectadas():
 
     function gaChecked(cls) {{
       var s = {{}};
-      Array.prototype.slice.call(document.querySelectorAll(cls + ':checked')).forEach(function (c) {{ s[c.value] = true; }});
+      Array.prototype.slice.call(document.querySelectorAll(WRAP + cls + ':checked')).forEach(function (c) {{ s[c.value] = true; }});
       return s;
     }}
     function gaFiltrar() {{
@@ -1179,11 +1198,11 @@ def build_guias_afectadas():
       }});
     }}
 
-    function gaOrdenar(col) {{
+    window.gaOrdenar_{sfx} = function (col) {{
       gaSort.asc = (gaSort.col === col) ? !gaSort.asc : true;
       gaSort.col = col;
       gaRender();
-    }}
+    }};
 
     var GA_COLS = ['n', 'mo', 'conv', 'cas', 'pob', 'consn', 'friL', 'kg', 've', 'awb', 'vr', 'saltados'];
     function gaFmtCons(r) {{
@@ -1216,10 +1235,10 @@ def build_guias_afectadas():
       var kg = 0, clientes = {{}};
       filtrado.forEach(function (r) {{ kg += r.kg; clientes[r.cas] = true; }});
       var nClientes = Object.keys(clientes).length;
-      document.getElementById('ga-kpi-pct').textContent = (GA_TOTAL ? (filtrado.length / GA_TOTAL * 100).toFixed(1) : '0') + '%';
-      document.getElementById('ga-kpi-n').textContent = gaFmtN(filtrado.length);
-      document.getElementById('ga-kpi-kg').textContent = gaFmtKg(kg);
-      document.getElementById('ga-kpi-clientes').textContent = gaFmtN(nClientes);
+      document.getElementById('ga-kpi-pct-{sfx}').textContent = (GA_TOTAL ? (filtrado.length / GA_TOTAL * 100).toFixed(1) : '0') + '%';
+      document.getElementById('ga-kpi-n-{sfx}').textContent = gaFmtN(filtrado.length);
+      document.getElementById('ga-kpi-kg-{sfx}').textContent = gaFmtKg(kg);
+      document.getElementById('ga-kpi-clientes-{sfx}').textContent = gaFmtN(nClientes);
 
       var filas = filtrado.map(function (r) {{
         return '<tr><td><a href="' + gaUrlGuia(r.n) + '" target="_blank" rel="noopener">' + r.n + '</a></td><td>' + (GA_MESES_LABEL[r.mo] || r.mo) + '</td><td>' +
@@ -1228,10 +1247,10 @@ def build_guias_afectadas():
           '</td><td>' + gaFmtKg(r.kg) + '</td><td>' + gaFmtFecha(r.ve) + '</td><td>' + gaFmtAwb(r) + '</td><td>' +
           (r.vr ? gaFmtFecha(r.vr) : '<span style="color:var(--bad)">aún no vuela</span>') + '</td><td class="ga-motivo">' + r.motivo + '</td></tr>';
       }});
-      document.getElementById('ga-tbody').innerHTML = filas.join('');
-      document.getElementById('ga-empty').style.display = filtrado.length ? 'none' : 'block';
+      document.getElementById('ga-tbody-{sfx}').innerHTML = filas.join('');
+      document.getElementById('ga-empty-{sfx}').style.display = filtrado.length ? 'none' : 'block';
 
-      var ths = document.querySelectorAll('#tabla-guias-afectadas thead th');
+      var ths = document.querySelectorAll('#tabla-guias-afectadas-{sfx} thead th');
       ths.forEach(function (h, i) {{
         h.classList.toggle('sorted-asc', i === gaSort.col && gaSort.asc);
         h.classList.toggle('sorted-desc', i === gaSort.col && !gaSort.asc);
@@ -1239,30 +1258,41 @@ def build_guias_afectadas():
     }}
 
     var GA_SELECTORES = {{ mes: '.filtro-mes', eje: '.filtro-eje', convenio: '.filtro-convenio', motivo: '.filtro-motivo', pob: '.filtro-pob', tam: '.filtro-tam', fri: '.filtro-fri' }};
-    function gaSeleccionar(grupo, modo) {{
-      var boxes = document.querySelectorAll(GA_SELECTORES[grupo]);
+    window.gaSeleccionar_{sfx} = function (grupo, modo) {{
+      var boxes = document.querySelectorAll(WRAP + GA_SELECTORES[grupo]);
       boxes.forEach(function (c) {{
         if (modo === 'todos') c.checked = true;
         else if (modo === 'ninguno') c.checked = false;
       }});
       gaRender();
-    }}
+    }};
 
-    function gaToggleCard(el) {{
+    window.gaToggleCard_{sfx} = function (el) {{
       el.closest('.filtro-card').classList.toggle('colapsado');
-    }}
+    }};
 
-    document.querySelectorAll('.filtro-mes, .filtro-eje, .filtro-convenio, .filtro-motivo, .filtro-pob, .filtro-tam, .filtro-fri').forEach(function (c) {{
+    document.querySelectorAll(WRAP + '.filtro-mes, ' + WRAP + '.filtro-eje, ' + WRAP + '.filtro-convenio, ' + WRAP + '.filtro-motivo, ' + WRAP + '.filtro-pob, ' + WRAP + '.filtro-tam, ' + WRAP + '.filtro-fri').forEach(function (c) {{
       c.addEventListener('change', gaRender);
     }});
     gaRender();
+  }})();
   </script>
 """
 
 
 seccion_conclusiones = build_conclusiones()
-seccion_guias_afectadas = build_guias_afectadas()
 seccion_capacidad = build_capacidad_vuelos()
+
+seccion_ga_estricto = build_guias_afectadas("estricto", "vuelo exacto", dom_id="ga_estricto")
+seccion_ga_semana = build_guias_afectadas("semana", "misma semana", dom_id="ga_semana")
+seccion_guias_afectadas = build_wrapper_subtabs(
+    "guiasaf",
+    seccion_ga_estricto,
+    seccion_ga_semana,
+    "Elige el criterio con el que se mide si una guía quedó afectada: \"vuelo exacto\" (no "
+    "subió al vuelo puntual que le correspondía) o \"misma semana\" (más permisivo -- no "
+    "cuenta como afectada si voló en otro vuelo de la misma semana calendario).",
+)
 
 seccion_estricto = build_seccion(
     "estricto",
