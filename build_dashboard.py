@@ -895,10 +895,11 @@ def build_conclusiones():
     <p class="sub" style="margin-bottom:14px">
       Tiempo entre que una guía queda "lista para volar" (pago + factura) y el momento en que
       el sistema la asigna a una guía madre. La mediana pasa de menos de 2 horas (dic-mar) a
-      4-11,5 horas (may-jul). Consistente con esto: el <b>85% de los incidentes</b> (definición
-      "vuelo exacto") se saltan exactamente UN vuelo — alcanzan el siguiente, no se quedan
-      varados varias semanas — lo que apunta a que quedan listas justo después del corte de
-      manifiesto del vuelo que les tocaba, no a una escasez de vuelos.
+      4-11,5 horas (may-jul). Consistente con esto: la gran mayoría de los incidentes
+      (definición "vuelo exacto") se saltan exactamente UN vuelo — alcanzan el siguiente, no se
+      quedan varados varias semanas — lo que apunta a un procesamiento más lento que deja la
+      guía lista después del corte de manifiesto (víspera 18:00) del vuelo que le tocaba, no a
+      una escasez de vuelos.
     </p>
     <div class="table-wrap" style="max-height:340px">
       <table id="tabla-lag" class="sortable"><thead><tr>
@@ -919,9 +920,8 @@ def build_conclusiones():
       correos en 2,5 h, 4 días parado hasta marcarlo "urgente"), y el registro en el módulo
       "Consolidaciones" se llena <b>después</b>, como acta. Esa fricción es real. La pregunta
       cuantitativa: ¿se traduce en que las guías-bulto no vuelan a tiempo más que las
-      individuales? Con los datos 2026, y tras corregir el corte de manifiesto (un pago que
-      llega pasado mediodía del día del vuelo ya no alcanza ese manifiesto), la respuesta es
-      <b>no</b>.
+      individuales? Con los datos 2026, y aplicando el corte de manifiesto (la guía tiene que
+      estar lista la víspera del vuelo hasta las 18:00), la respuesta es <b>no</b>.
     </p>
     <div class="kpis">
       <div class="kpi"><div class="v">{fmt_pct(fr_ind.get('pct', 0))}</div><div class="l">Individuales que no volaron en su vuelo exacto ({fmt_n(fr_ind.get('afectadas', 0))} de {fmt_n(fr_ind.get('evaluables', 0))})</div></div>
@@ -929,10 +929,10 @@ def build_conclusiones():
       <div class="kpi"><div class="v">{fmt_pct(fr_neto.get('pct', 0))}</div><div class="l">Consolidadas "neto" — descontando las {fmt_n(fr_af_fp.get('n', 0))} con factura pendiente al cerrar el bulto</div></div>
     </div>
     <p class="sub" style="margin-bottom:14px">
-      Antes de este análisis las consolidadas se veían ~2x peor que las individuales; casi todo
-      ese exceso era el artefacto del corte de manifiesto (las guías-bulto quedan "listas" en la
-      tarde, cuando se arma el bulto, y se les asignaba por error el vuelo de ese mismo día). Con
-      el cálculo corregido, individuales y consolidadas están prácticamente iguales
+      Con una regla de corte laxa (mismo día del vuelo) las consolidadas se veían bastante peor
+      que las individuales, porque las guías-bulto quedan "listas" en la tarde cuando se arma
+      el bulto. Aplicando el corte de manifiesto de la víspera, individuales y consolidadas
+      están prácticamente iguales
       ({fmt_pct(fr_ind.get('pct', 0))} vs {fmt_pct(fr_cons.get('pct', 0))}). Queda una brecha
       residual sólo en temporada baja (enero-febrero) — ver tabla por mes.
     </p>
@@ -1910,7 +1910,7 @@ seccion_consolidadas = build_wrapper_subtabs(
         ),
         (
             "✅", "¿Qué resta \"Neto\"?",
-            "Esa fricción es real, pero tras corregir el corte de manifiesto <b>ya NO se "
+            "Esa fricción es real, pero con el corte de manifiesto de la víspera <b>no se "
             "traduce en que las guías-bulto vuelen peor que las individuales</b> (tasas "
             "casi iguales — ver Conclusiones punto 3). \"Neto\" resta el único efecto que "
             "los datos aíslan con confianza: bultos cerrados con factura pendiente.",
@@ -2183,9 +2183,15 @@ HTML = f"""<!DOCTYPE html>
       con feriados/ajustes avisados por correo).
     </p>
     <p>
-      <b>Criterio "vuelo exacto":</b> para cada guía lista, se busca el primer vuelo del
-      calendario con fecha ≥ fecha_lista ("vuelo esperado"). Se compara contra el vuelo real
-      en que brotó (agrupado igual que el calendario). Es incidente si brotó en un vuelo
+      <b>Corte de manifiesto:</b> para subir a un vuelo, la guía tiene que estar lista (pago
+      + factura en Miami) a más tardar el <b>día anterior al vuelo, hasta las 18:00</b>. El
+      "vuelo esperado" de una guía es el primer vuelo del calendario cuyo corte (víspera
+      18:00) es ≥ fecha_lista. Si queda lista después de ese corte, le corresponde el vuelo
+      siguiente.
+    </p>
+    <p>
+      <b>Criterio "vuelo exacto":</b> se compara el vuelo esperado contra el vuelo real en que
+      brotó (agrupado igual que el calendario). Es incidente si brotó en un vuelo
       <b>posterior</b> al esperado, o si todavía no ha brotado y el esperado ya pasó.
     </p>
     <p>

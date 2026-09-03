@@ -106,26 +106,20 @@ CALENDARIO de vuelos a los guia_madres COURIER de 1 sola guia (los 7 casos
 mencionados arriba) -- ya no cuentan como "el vuelo que le correspondia" a
 NINGUNA otra guia tampoco, porque no son vuelos regulares compartidos.
 
---- Correccion de fondo (3): hora de corte de manifiesto (2026-09-02) ---
-Jorge aclaro un matiz operativo: existe un horario de corte para subir a un
-vuelo -- en operaciones se validan los pagos normalmente hasta las 12:00 del
-DIA del vuelo (miercoles/viernes). Si el pago llega a esa hora o despues,
-la guia queda fuera de ESE vuelo aunque el despacho fisico ocurra mas tarde
-ese mismo dia -- se asigna al PRIMER vuelo siguiente. Ejemplo dado: guia
-llega jueves, sube factura el viernes, pero el cliente paga el viernes a
-las 14:00 -> esa guia queda fuera del vuelo del viernes y le corresponde el
-miercoles de la semana siguiente, no el viernes (aunque el despacho de ese
-viernes sea, por ejemplo, en la tarde).
-Hasta ahora `primer_vuelo_desde()` solo comparaba timestamps crudos
-(ts_vuelo >= fecha_lista) -- no distinguia "alcanzo a validarse antes del
-corte" de "broto el mismo dia pero de pura casualidad porque el despacho
-fisico fue tarde". Fix: se agrega CORTE_MANIFIESTO_HORA (12:00) -- si el
-primer vuelo con ts >= fecha_lista cae el MISMO dia calendario que
-fecha_lista Y fecha_lista.hour >= 12, ese vuelo no cuenta como "el que le
-correspondia"; se sigue buscando el vuelo siguiente (que puede ser otro vuelo
-ese mismo dia, si lo hay, o el proximo dia de vuelo). No afecta `vuelo_real`
-(el vuelo en que la guia efectivamente broto, un hecho empirico) -- solo la
-determinacion de `vuelo_esperado`.
+--- Correccion de fondo (3): corte de manifiesto (2026-09-02, revisado 2026-09-03) ---
+Existe un horario de corte para subir a un vuelo. Regla ACTUAL (Jorge,
+2026-09-03): la guia tiene que estar LISTA (pago + factura en Miami) a mas
+tardar el DIA ANTERIOR al vuelo, hasta las 18:00. Si queda lista despues de
+ese corte no alcanza ese manifiesto y le corresponde el PRIMER vuelo
+siguiente. Ejemplo: vuelo el miercoles -> corte el martes a las 18:00; una
+guia que queda lista el martes 20:00, o el miercoles, ya no entra a ese
+manifiesto y le toca el vuelo del viernes.
+`primer_vuelo_desde()` recorre el calendario y devuelve el primer vuelo cuyo
+corte (vispera 18:00) sea >= fecha_lista. Constantes
+CORTE_MANIFIESTO_DIAS_ANTES (1) y CORTE_MANIFIESTO_HORA (18). No afecta
+`vuelo_real` (el vuelo en que la guia efectivamente broto, un hecho empirico)
+-- solo la determinacion de `vuelo_esperado`.
+(Regla anterior, 2026-09-02: 12:00 del MISMO dia del vuelo -- menos estricta.)
 
 --- Investigacion de causa (2026-09-01) ---
 Jorge pidio razonar por que abril-junio muestran tasas tan altas, y ademas
@@ -174,7 +168,7 @@ from datetime import datetime, date, timedelta, timezone
 import statistics
 
 # Este repo es PUBLICO (ver README) -- a diferencia de la copia local del
-# script (que sí trae un default hardcodeado para comodidad), aquí el token
+# script (que si trae un default hardcodeado para comodidad), aqui el token
 # SOLO puede venir del secret de GitHub Actions. Nunca hardcodear el valor
 # real en este archivo.
 NOCO_TOKEN = os.environ.get("NOCO_TOKEN")
@@ -224,12 +218,16 @@ ANIO_REPORTE = 2026
 # de vuelo. Calibrado contra el grupo de control (guias-bulto que SI
 # alcanzaron su vuelo) -- ver control_armado_dias_volaron_ok en el JSON.
 UMBRAL_ARMADO_LENTO_DIAS = 3
-# Hora de corte de manifiesto: operaciones valida pagos hasta las 12:00 del
-# DIA del vuelo -- un pago que llega a esa hora o despues ya no alcanza el
-# manifiesto de ese vuelo, aunque el despacho fisico ocurra mas tarde ese
-# mismo dia. Confirmado por Jorge, 2026-09-02 (ver "Correccion de fondo (3)"
-# en el docstring del modulo).
-CORTE_MANIFIESTO_HORA = 12
+# Corte para entrar al manifiesto de un vuelo (regla actualizada por Jorge,
+# 2026-09-03): la guia tiene que estar LISTA (pago + factura en Miami) a mas
+# tardar el DIA ANTERIOR al vuelo, hasta las 18:00. Si queda lista despues de
+# ese corte no alcanza ese manifiesto y le corresponde el vuelo siguiente.
+# (La regla anterior era 12:00 del MISMO dia del vuelo -- esta es mas estricta:
+# ahora hay que estar listo la vispera.)  Las horas se comparan en el mismo
+# reloj en que vienen los timestamps de la fuente (NocoDB, etiquetados UTC),
+# igual que la regla anterior.
+CORTE_MANIFIESTO_DIAS_ANTES = 1
+CORTE_MANIFIESTO_HORA = 18
 # Criterio "margen" (pedido de Jorge, 2026-09-03): un tercer criterio de
 # "afectada", ademas de "vuelo exacto" y "misma semana". Una guia NO cuenta
 # como afectada SOLO si cumple LOS DOS topes a la vez:
@@ -814,22 +812,21 @@ def main():
     vuelos_ts = [v["ts"] for v in vuelos]
 
     def primer_vuelo_desde(fecha_lista):
-        # Primer vuelo del calendario con ts >= fecha_lista, respetando el
+        # Primer vuelo del calendario al que la guia alcanza a subirse dado el
         # corte de manifiesto (busqueda lineal ordenada; volumen bajo,
-        # ~90-150 vuelos, no hace falta bisect). Si fecha_lista cae el MISMO
-        # dia calendario de un vuelo pero a las CORTE_MANIFIESTO_HORA (12:00)
-        # o despues, ese vuelo no cuenta -- operaciones ya no alcanza a
-        # validar el pago para ese manifiesto, aunque el despacho fisico sea
-        # mas tarde ese mismo dia. Se sigue buscando el vuelo siguiente
-        # (ejemplo de Jorge, 2026-09-02: factura sube viernes, pago llega
-        # viernes 14:00 -> queda para el miercoles siguiente, no para el
-        # vuelo del viernes aunque ese vuelo despache en la tarde).
+        # ~90-150 vuelos, no hace falta bisect). Regla (Jorge, 2026-09-03): la
+        # guia tiene que estar lista (pago + factura) a mas tardar el dia
+        # ANTERIOR al vuelo, a las CORTE_MANIFIESTO_HORA (18:00). El primer
+        # vuelo cuyo corte (vispera 18:00) sea >= fecha_lista es "el que le
+        # correspondia". Ejemplo: vuelo el miercoles -> corte martes 18:00;
+        # una guia lista el martes 20:00 (o el miercoles) ya no alcanza ese
+        # manifiesto y le toca el vuelo del viernes.
         for ts in vuelos_ts:
-            if ts < fecha_lista:
-                continue
-            if ts.date() == fecha_lista.date() and fecha_lista.hour >= CORTE_MANIFIESTO_HORA:
-                continue  # mismo dia del vuelo, pero paso el corte de manifiesto
-            return ts
+            corte = (ts - timedelta(days=CORTE_MANIFIESTO_DIAS_ANTES)).replace(
+                hour=CORTE_MANIFIESTO_HORA, minute=0, second=0, microsecond=0
+            )
+            if fecha_lista <= corte:
+                return ts
         return None
 
     # --- 2. Por guia: fecha en que quedo lista, vuelo correspondiente,
