@@ -267,15 +267,8 @@ def build_resumen_ejecutivo():
     pct_est = round(est["total_incidentes"] / est["total_evaluables"] * 100, 1) if est["total_evaluables"] else 0
     pct_sem = round(sem["total_incidentes"] / sem["total_evaluables"] * 100, 1) if sem["total_evaluables"] else 0
 
-    filas_mes = "".join(
-        f"<tr><td data-v='{k}'>{mes_label(k)}</td>"
-        f"<td data-v='{v['evaluables']}'>{fmt_n(v['evaluables'])}</td>"
-        f"<td data-v='{v['incidentes']}'>{fmt_n(v['incidentes'])}</td>"
-        f"<td data-v='{v['pct']}' style='color:{color_por_pct(v['pct'])};font-weight:700'>{fmt_pct(v['pct'])}</td>"
-        f"<td data-v='{v['kilos']}'>{fmt_kg(v['kilos'])}</td>"
-        f"<td data-v='{v['clientes']}'>{fmt_n(v['clientes'])}</td></tr>"
-        for k, v in sorted(b["por_mes"].items())
-    )
+    tabla_res_semanal = tabla_html(sorted(b["por_semana"].items()), semana_label, semanal=True)
+    tabla_res_mensual = tabla_html(sorted(b["por_mes"].items()), mes_label, semanal=False)
 
     return f"""
   <p class="sub">
@@ -313,16 +306,40 @@ def build_resumen_ejecutivo():
   </section>
 
   <section>
-    <h2>Mes a mes</h2>
+    <h2>Semana a semana / mes a mes</h2>
+    <p class="sub" style="margin-bottom:12px">
+      Guías afectadas bajo el mismo criterio (se saltó más de 1 vuelo o no ha volado),
+      contadas en la semana/mes del vuelo que les correspondía. "% Kilos" = kilos afectados
+      sobre kilos evaluados de ese período.
+    </p>
+    <div class="toggle">
+      <button id="btn-resumen-tabla-semanal" class="active" onclick="verTabla('resumen','semanal')">Semanal</button>
+      <button id="btn-resumen-tabla-mensual" onclick="verTabla('resumen','mensual')">Mensual</button>
+    </div>
     <div class="table-wrap">
-      <table id="tabla-resumen-mes" class="sortable"><thead><tr>
-        <th onclick="ordenarTabla('tabla-resumen-mes',0,'str')">Mes</th>
-        <th onclick="ordenarTabla('tabla-resumen-mes',1,'num')">Guías evaluadas</th>
-        <th onclick="ordenarTabla('tabla-resumen-mes',2,'num')">Afectadas</th>
-        <th onclick="ordenarTabla('tabla-resumen-mes',3,'num')">%</th>
-        <th onclick="ordenarTabla('tabla-resumen-mes',4,'num')">Kilos afectados</th>
-        <th onclick="ordenarTabla('tabla-resumen-mes',5,'num')">Clientes afectados</th>
-      </tr></thead><tbody>{filas_mes}</tbody></table>
+      <div id="view-resumen-tabla-semanal" class="view active">
+        <table id="tabla-resumen-semanal" class="sortable"><thead><tr>
+          <th onclick="ordenarTabla('tabla-resumen-semanal',0,'num')">N° Semana</th>
+          <th onclick="ordenarTabla('tabla-resumen-semanal',1,'str')">Semana (lunes)</th>
+          <th onclick="ordenarTabla('tabla-resumen-semanal',2,'num')">Guías evaluadas</th>
+          <th onclick="ordenarTabla('tabla-resumen-semanal',3,'num')">Afectadas</th>
+          <th onclick="ordenarTabla('tabla-resumen-semanal',4,'num')">%</th>
+          <th onclick="ordenarTabla('tabla-resumen-semanal',5,'num')">Kilos</th>
+          <th onclick="ordenarTabla('tabla-resumen-semanal',6,'num')">% Kilos</th>
+          <th onclick="ordenarTabla('tabla-resumen-semanal',7,'num')">Clientes</th>
+        </tr></thead><tbody>{tabla_res_semanal}</tbody></table>
+      </div>
+      <div id="view-resumen-tabla-mensual" class="view">
+        <table id="tabla-resumen-mensual" class="sortable"><thead><tr>
+          <th onclick="ordenarTabla('tabla-resumen-mensual',0,'str')">Mes</th>
+          <th onclick="ordenarTabla('tabla-resumen-mensual',1,'num')">Guías evaluadas</th>
+          <th onclick="ordenarTabla('tabla-resumen-mensual',2,'num')">Afectadas</th>
+          <th onclick="ordenarTabla('tabla-resumen-mensual',3,'num')">%</th>
+          <th onclick="ordenarTabla('tabla-resumen-mensual',4,'num')">Kilos</th>
+          <th onclick="ordenarTabla('tabla-resumen-mensual',5,'num')">% Kilos</th>
+          <th onclick="ordenarTabla('tabla-resumen-mensual',6,'num')">Clientes</th>
+        </tr></thead><tbody>{tabla_res_mensual}</tbody></table>
+      </div>
     </div>
   </section>
 
