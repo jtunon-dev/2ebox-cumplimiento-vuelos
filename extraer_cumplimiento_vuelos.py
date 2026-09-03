@@ -1037,6 +1037,30 @@ def main():
             for c in capacidad_mensual if datetime.fromisoformat(c["ts_final"]).year == ANIO_REPORTE
         ],
         "total_guias_evaluables": len(detalle),
+        # Universo COMPLETO evaluable de 2026 (individuales + consolidadas
+        # mezcladas, afectadas Y no afectadas) -- NO es un rollup de
+        # incidentes. Pedido de Jorge (2026-09-03): en "Guias afectadas"
+        # quiere el denominador real de cada filtro (ej. "36 de 300 guias",
+        # no solo "36"), y eso exige saber cuantas guias evaluables (con o
+        # sin incidente) caen en cada combinacion de filtros -- imposible de
+        # sacar solo de `detalle_incidentes` (que ya viene pre-filtrado a
+        # incidentes). Mismos campos que necesita build_guias_afectadas()
+        # para clasificar cada fila por mes/ejecutiva/convenio/poblacion/
+        # tamaño/fricción, mas los dos flags de incidente (para que el
+        # frontend sepa, sin recalcular nada, si esa guia es "afectada" bajo
+        # cada criterio).
+        "universo_evaluable_2026": [
+            {
+                k: d[k] for k in (
+                    "n_guia", "casilla", "peso", "consolidada", "cons_id",
+                    "cons_n_guias", "cons_friccion", "armado_lag_dias",
+                    "convenio", "vuelo_esperado", "vuelo_real", "awb",
+                    "aerolinea", "no_volo_estricto", "no_volo_semana",
+                )
+            }
+            for d in detalle
+            if datetime.fromisoformat(d["vuelo_esperado"]).year == ANIO_REPORTE
+        ],
         "lag_asignacion_por_mes": lag_resumen_por_mes,
         # "estricto"/"semana" = TODAS las guias (individuales + consolidadas
         # mezcladas) -- se conservan para calculos que si necesitan el total

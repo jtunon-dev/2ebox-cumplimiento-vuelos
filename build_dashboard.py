@@ -969,7 +969,13 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     JS generados acá -- obligatorio pasarlo distinto en cada llamada o los
     dos <script> quedan pisándose variables globales del mismo nombre."""
     sfx = dom_id or scope
-    inc = data[scope]["detalle_incidentes"]
+    # Universo COMPLETO evaluable 2026 (afectadas Y no afectadas) -- pedido
+    # de Jorge (2026-09-03): quiere denominadores reales por filtro ("36
+    # guías afectadas de 300 evaluadas", no solo "36"). Cada fila trae "af"
+    # (bool, si es afectada bajo ESTE scope) -- el universo se usa para los
+    # denominadores, la tabla y el numerador siguen mostrando solo las
+    # afectadas.
+    universo = data["universo_evaluable_2026"]
 
     def clasificar_ejecutiva(conv):
         if conv in KATHY_CONVENIOS:
@@ -1042,53 +1048,73 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         return "11+ guías"
 
     filas = []
-    for r in inc:
+    for r in universo:
         mo = r["vuelo_esperado"][:7]
         conv = r["convenio"] or ""
-        ve_dt = _parse_iso(r["vuelo_esperado"])
-        vr_dt = _parse_iso(r["vuelo_real"])
-        motivo, categoria, saltados, dias = _dato_blando(ve_dt, vr_dt)
+        afectada = bool(r["no_volo_" + scope])
+        if afectada:
+            ve_dt = _parse_iso(r["vuelo_esperado"])
+            vr_dt = _parse_iso(r["vuelo_real"])
+            motivo, categoria, saltados, dias = _dato_blando(ve_dt, vr_dt)
+        else:
+            # No afectada -- "motivo" no aplica (no se subieron KPIs de por
+            # qué, porque no hay atraso que explicar). No cuesta calcular
+            # _dato_blando() para las ~4.400 filas del universo cuando solo
+            # ~700-900 son afectadas.
+            motivo, categoria, saltados, dias = "", "", 0, 0
+        # Campos que solo se usan para RENDERIZAR la fila en la tabla (que
+        # solo muestra afectadas) -- se omiten (None) en las no afectadas
+        # para no engordar el JSON embebido con ~3.700 filas de datos que
+        # nunca se muestran (el universo completo por scope pasó de ~965 a
+        # ~4.392 filas al agregar los denominadores, 2026-09-03).
         filas.append({
-            "n": r["n_guia"],
+            "n": r["n_guia"] if afectada else None,
             "mo": mo,
             "eje": clasificar_ejecutiva(conv),
             "conv": conv,
             "cas": r["casilla"] or "",
             "pob": "Consolidada" if r["consolidada"] else "Individual",
             "consn": r.get("cons_n_guias") or 0,
-            "consid": r.get("cons_id"),
+            "consid": r.get("cons_id") if afectada else None,
             "tam": _tam_bucket(r.get("cons_n_guias") if r["consolidada"] else 0),
             "fri": r.get("cons_friccion") or "",
             "friL": FRICCION_LABEL.get(r.get("cons_friccion") or "", "Sin señal / individual"),
-            "armado": r.get("armado_lag_dias"),
+            "armado": r.get("armado_lag_dias") if afectada else None,
             "kg": round(r["peso"] or 0, 1),
-            "awb": r.get("awb") or "",
-            "aerolinea": r.get("aerolinea") or "",
-            "ve": r["vuelo_esperado"][:10],
-            "vr": r["vuelo_real"][:10] if r["vuelo_real"] else None,
+            "awb": (r.get("awb") or "") if afectada else None,
+            "aerolinea": (r.get("aerolinea") or "") if afectada else None,
+            "ve": r["vuelo_esperado"][:10] if afectada else None,
+            "vr": (r["vuelo_real"][:10] if r["vuelo_real"] else None) if afectada else None,
             "mot": categoria,
             "motivo": motivo,
             "saltados": saltados,
             "dias": dias,
+            "af": afectada,
         })
 
-    meses_presentes = sorted(set(r["mo"] for r in filas))
-    convenio_counts = Counter(r["conv"] for r in filas)
+    # Las opciones de cada filtro (qué meses/ejecutivas/convenios/etc.
+    # aparecen como checkbox, y el numerito al lado) se siguen sacando SOLO
+    # de las afectadas -- igual que antes de agregar el universo completo.
+    # Esta pestaña es para acotar guías AFECTADAS; un convenio con 300
+    # guías evaluables pero 0 afectadas no aporta como filtro acá.
+    afectadas_todas = [r for r in filas if r["af"]]
+    meses_presentes = sorted(set(r["mo"] for r in afectadas_todas))
+    convenio_counts = Counter(r["conv"] for r in afectadas_todas)
     convenios_ordenados = sorted(convenio_counts.items(), key=lambda kv: -kv[1])
-    ejecutiva_counts = Counter(r["eje"] for r in filas)
-    motivo_counts = Counter(r["mot"] for r in filas)
+    ejecutiva_counts = Counter(r["eje"] for r in afectadas_todas)
+    motivo_counts = Counter(r["mot"] for r in afectadas_todas)
     ORDEN_MOTIVOS = ["Saltó 1 vuelo", "Saltó 2 vuelos", "Saltó 3+ vuelos", "Aún no vuela"]
     motivos_presentes = [m for m in ORDEN_MOTIVOS if motivo_counts.get(m)]
 
-    pob_counts = Counter(r["pob"] for r in filas)
-    tam_counts = Counter(r["tam"] for r in filas)
+    pob_counts = Counter(r["pob"] for r in afectadas_todas)
+    tam_counts = Counter(r["tam"] for r in afectadas_todas)
     ORDEN_TAM = ["Individual", "2-3 guías", "4-6 guías", "7-10 guías", "11+ guías"]
     tam_presentes = [t for t in ORDEN_TAM if tam_counts.get(t)]
-    fri_counts = Counter(r["friL"] for r in filas)
+    fri_counts = Counter(r["friL"] for r in afectadas_todas)
     ORDEN_FRI = ["Factura pendiente al cerrar", "Armado lento (>3 días)", "Sin señal / individual"]
     fri_presentes = [f for f in ORDEN_FRI if fri_counts.get(f)]
 
-    conteo_por_mes = Counter(r["mo"] for r in filas)
+    conteo_por_mes = Counter(r["mo"] for r in afectadas_todas)
     checkboxes_meses = "".join(
         f'<label class="chk"><input type="checkbox" class="filtro-mes" value="{mo}" checked>'
         f'{mes_label(mo)}<span class="chk-n">{conteo_por_mes[mo]}</span></label>'
@@ -1141,9 +1167,11 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
 
     return f"""
   <p class="sub">
-    Detalle guía a guía de las {fmt_n(len(filas))} guías afectadas en 2026 bajo el criterio
-    "{titulo_bloque}". Filtra por fecha, ejecutiva, convenio, población, tamaño de
-    consolidación o señal de fricción a la izquierda — los KPIs y la tabla se recalculan solos.
+    Detalle guía a guía de las {fmt_n(len(afectadas_todas))} guías afectadas en 2026 bajo el
+    criterio "{titulo_bloque}", de {fmt_n(len(universo))} guías evaluables en total. Filtra por
+    fecha, ejecutiva, convenio, población, tamaño de consolidación o señal de fricción a la
+    izquierda — los KPIs (con su denominador real para ese filtro) y la tabla se recalculan
+    solos.
   </p>
 
   <div class="ga-layout" id="ga-wrap-{sfx}">
@@ -1180,10 +1208,10 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
 
     <div class="ga-content">
       <div class="kpis" id="ga-kpis-{sfx}">
-        <div class="kpi bad"><div class="v" id="ga-kpi-pct-{sfx}">100%</div><div class="l">% del total de afectadas</div></div>
-        <div class="kpi"><div class="v" id="ga-kpi-n-{sfx}">{fmt_n(len(filas))}</div><div class="l">Guías (con este filtro)</div></div>
-        <div class="kpi"><div class="v" id="ga-kpi-kg-{sfx}">0 kg</div><div class="l">Kilos</div></div>
-        <div class="kpi"><div class="v" id="ga-kpi-clientes-{sfx}">0</div><div class="l">Clientes únicos</div></div>
+        <div class="kpi bad"><div class="v" id="ga-kpi-pct-{sfx}">—</div><div class="l">% afectadas sobre este filtro</div></div>
+        <div class="kpi"><div class="v" id="ga-kpi-n-{sfx}">—</div><div class="l">Guías afectadas / evaluadas</div></div>
+        <div class="kpi"><div class="v" id="ga-kpi-kg-{sfx}">—</div><div class="l">Kilos afectados / evaluados</div></div>
+        <div class="kpi"><div class="v" id="ga-kpi-clientes-{sfx}">—</div><div class="l">Clientes afectados / evaluados</div></div>
       </div>
 
       <div class="table-wrap" style="max-height:520px">
@@ -1212,13 +1240,17 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
   <script>
   (function () {{
     var WRAP = '#ga-wrap-{sfx} ';
+    // GA_DATOS = universo COMPLETO evaluable (afectadas Y no afectadas,
+    // campo "af"). La tabla y el numerador de los KPIs solo muestran las
+    // afectadas; el universo filtrado da el denominador real ("36 de 300").
     var GA_DATOS = {datos_json};
     var GA_MESES_LABEL = {json.dumps({mo: mes_label(mo) for mo in meses_presentes}, ensure_ascii=False)};
-    var GA_TOTAL = GA_DATOS.length;
     var gaSort = {{ col: 0, asc: true }};
 
     function gaFmtN(n) {{ return n.toLocaleString('es-CL'); }}
     function gaFmtKg(n) {{ return Math.round(n).toLocaleString('es-CL') + ' kg'; }}
+    function gaFmtDeN(n, total) {{ return gaFmtN(n) + ' de ' + gaFmtN(total); }}
+    function gaFmtDeKg(kg, total) {{ return gaFmtN(Math.round(kg)) + ' de ' + gaFmtN(Math.round(total)) + ' kg'; }}
     function gaFmtFecha(iso) {{
       if (!iso) return '';
       var p = iso.split('-');
@@ -1243,10 +1275,20 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
       var pobSet = gaChecked('.filtro-pob');
       var tamSet = gaChecked('.filtro-tam');
       var friSet = gaChecked('.filtro-fri');
-      return GA_DATOS.filter(function (r) {{
-        return mesesSet[r.mo] && ejeSet[r.eje] && convSet[r.conv] && motSet[r.mot]
+      // "universo": todas las guías evaluables (afectadas o no) que caen en
+      // los filtros de atributo (fecha/ejecutiva/convenio/población/tamaño/
+      // fricción) -- es el DENOMINADOR real de los KPIs. El filtro "Motivo"
+      // no se aplica acá a propósito: no es un atributo de la guía en sí,
+      // solo tiene sentido para las que SÍ están afectadas (ver más abajo).
+      var universo = GA_DATOS.filter(function (r) {{
+        return mesesSet[r.mo] && ejeSet[r.eje] && convSet[r.conv]
           && pobSet[r.pob] && tamSet[r.tam] && friSet[r.friL];
       }});
+      // "afectadas": del universo de arriba, solo las que además están
+      // afectadas bajo este criterio Y pasan el filtro de Motivo -- es lo
+      // que se ve en la tabla y el NUMERADOR de los KPIs.
+      var afectadas = universo.filter(function (r) {{ return r.af && motSet[r.mot]; }});
+      return {{ universo: universo, afectadas: afectadas }};
     }}
 
     window.gaOrdenar_{sfx} = function (col) {{
@@ -1268,9 +1310,10 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     }}
 
     function gaRender() {{
-      var filtrado = gaFiltrar();
+      var res = gaFiltrar();
+      var universo = res.universo, afectadas = res.afectadas;
       var col = GA_COLS[gaSort.col];
-      filtrado.sort(function (a, b) {{
+      afectadas.sort(function (a, b) {{
         var va = a[col], vb = b[col];
         if (va === null) va = '';
         if (vb === null) vb = '';
@@ -1283,15 +1326,20 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         return 0;
       }});
 
-      var kg = 0, clientes = {{}};
-      filtrado.forEach(function (r) {{ kg += r.kg; clientes[r.cas] = true; }});
-      var nClientes = Object.keys(clientes).length;
-      document.getElementById('ga-kpi-pct-{sfx}').textContent = (GA_TOTAL ? (filtrado.length / GA_TOTAL * 100).toFixed(1) : '0') + '%';
-      document.getElementById('ga-kpi-n-{sfx}').textContent = gaFmtN(filtrado.length);
-      document.getElementById('ga-kpi-kg-{sfx}').textContent = gaFmtKg(kg);
-      document.getElementById('ga-kpi-clientes-{sfx}').textContent = gaFmtN(nClientes);
+      var kgAf = 0, clientesAf = {{}};
+      afectadas.forEach(function (r) {{ kgAf += r.kg; clientesAf[r.cas] = true; }});
+      var nClientesAf = Object.keys(clientesAf).length;
 
-      var filas = filtrado.map(function (r) {{
+      var kgTot = 0, clientesTot = {{}};
+      universo.forEach(function (r) {{ kgTot += r.kg; clientesTot[r.cas] = true; }});
+      var nClientesTot = Object.keys(clientesTot).length;
+
+      document.getElementById('ga-kpi-pct-{sfx}').textContent = (universo.length ? (afectadas.length / universo.length * 100).toFixed(1) : '0') + '%';
+      document.getElementById('ga-kpi-n-{sfx}').textContent = gaFmtDeN(afectadas.length, universo.length);
+      document.getElementById('ga-kpi-kg-{sfx}').textContent = gaFmtDeKg(kgAf, kgTot);
+      document.getElementById('ga-kpi-clientes-{sfx}').textContent = gaFmtDeN(nClientesAf, nClientesTot);
+
+      var filas = afectadas.map(function (r) {{
         return '<tr><td><a href="' + gaUrlGuia(r.n) + '" target="_blank" rel="noopener">' + r.n + '</a></td><td>' + (GA_MESES_LABEL[r.mo] || r.mo) + '</td><td>' +
           (r.conv || '<span style="color:var(--ink-faint)">(sin convenio)</span>') + '</td><td>' + r.cas + '</td><td>' + r.pob +
           '</td><td>' + gaFmtCons(r) + '</td><td>' + gaFmtFri(r) +
@@ -1299,7 +1347,7 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
           (r.vr ? gaFmtFecha(r.vr) : '<span style="color:var(--bad)">aún no vuela</span>') + '</td><td class="ga-motivo">' + r.motivo + '</td></tr>';
       }});
       document.getElementById('ga-tbody-{sfx}').innerHTML = filas.join('');
-      document.getElementById('ga-empty-{sfx}').style.display = filtrado.length ? 'none' : 'block';
+      document.getElementById('ga-empty-{sfx}').style.display = afectadas.length ? 'none' : 'block';
 
       var ths = document.querySelectorAll('#tabla-guias-afectadas-{sfx} thead th');
       ths.forEach(function (h, i) {{
