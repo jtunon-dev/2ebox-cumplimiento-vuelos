@@ -210,7 +210,10 @@ FIELDS = (
     "n_guia,casilla,id_estado,fecha_ingreso,fecha_primer_pago,fecha_miami_con_factura,"
     "fecha_asignado_guia_madre,fecha_despachado_aeropuerto"
 )
-FIELDS_GUIA_HIJAS = "n_guia,peso,consolidacion,v_codigo_convenio"
+FIELDS_GUIA_HIJAS = (
+    "n_guia,peso,consolidacion,v_codigo_convenio,"
+    "costo_producto,es_empresa,derechos,costo_agente,usd"
+)
 FIELDS_GUIA_MADRES = "id,awb,flight_date,flight_number,tipo_transporte,items,fecha_creacion"
 FECHA_DESDE = "2025-12-15"
 ANIO_REPORTE = 2026
@@ -507,6 +510,120 @@ def calcular_capacidad_mensual(detalle, vuelos):
     )
 
 
+# --- Modelo de agrupacion por umbrales de aduana (pedido de Jorge, 2026-09-03) ---
+# 2ebox separa deliberadamente guias del MISMO cliente en vuelos distintos
+# cuando, sumadas, cruzarian un umbral de aduana chileno: sobre USD 500 de
+# valor declarado un cliente PERSONA paga ad valorem; sobre USD 3.000
+# (cualquier cliente) se necesita agente de aduana. Separarlas mantiene a
+# cada guia bajo el umbral -- mas facil de gestionar con el cliente, que en
+# general prefiere pagar menos. Jorge pidio cuantificar el costo en TIEMPO
+# de esa practica (dias extra de espera) vs el costo en PLATA que evita
+# (derechos/agente de aduana), para poder cuestionar si vale la pena
+# seguir asi dado que puede estar inflando la tasa de "no volo en su vuelo
+# correspondiente" sin que sea una falla operativa real.
+UMBRAL_AD_VALOREM_USD = 500
+UMBRAL_AGENTE_ADUANA_USD = 3000
+VENTANA_SPLIT_DIAS = 3  # separacion maxima entre vuelo_esperado de 2 guias del mismo cliente para considerar que "podrian haber ido juntas"
+
+
+def _calcular_benchmarks_aduana(filas_guia_hijas):
+    """Tasa efectiva de ad valorem y costo de agente de aduana, calculados
+    EN VIVO a partir de guias reales de 2026 que YA cruzaron cada umbral
+    (no separadas) -- no hardcodeados, para que se autoactualicen solos si
+    cambian las tarifas/el tipo de cambio. ad_valorem: mediana de
+    derechos/valor_CLP en guias con costo_producto entre 500 y 3.000 (zona
+    donde se paga ad valorem pero todavia no se necesita agente).
+    costo_agente: mediana de costo_agente (USD) en guias con costo_producto
+    > 3.000 (salio flat fee de USD 160 en la muestra de 2026-09-03, pero
+    se recalcula cada corrida por si acaso)."""
+    ratios, agentes = [], []
+    for r in filas_guia_hijas:
+        cp = r.get("costo_producto") or 0
+        usd = r.get("usd") or 0
+        der = r.get("derechos") or 0
+        agente = r.get("costo_agente") or 0
+        if 500 < cp < 3000 and der > 0 and usd > 0:
+            ratios.append(der / (cp * usd))
+        if cp > 3000 and agente > 0:
+            agentes.append(agente)
+    return {
+        "tasa_ad_valorem_pct": round(statistics.median(ratios) * 100, 1) if ratios else 6.7,
+        "muestra_ad_valorem": len(ratios),
+        "costo_agente_usd": round(statistics.median(agentes)) if agentes else 160,
+        "muestra_agente": len(agentes),
+    }
+
+
+def _detectar_splits_umbral_aduana(detalle, costo_producto_por_guia, es_empresa_por_guia, usd_por_guia, benchmarks):
+    """Busca pares de guias del MISMO cliente (casilla), listas dentro de
+    VENTANA_SPLIT_DIAS de diferencia (vuelo_esperado -- proxy de "cuando
+    quedaron disponibles para volar"), que terminaron en guia_madre (AWB)
+    DISTINTO -- candidatas a separacion deliberada por umbral de aduana.
+    Solo cuenta si cada guia por separado queda BAJO el umbral pero
+    SUMADAS lo cruzan (si una ya pasaba el umbral sola, no es un "split",
+    igual iba a pagar)."""
+    por_casilla = defaultdict(list)
+    for d in detalle:
+        ng = str(d["n_guia"])
+        if not d["awb"] or not d["vuelo_real"]:
+            continue  # todavia no vuela, no hay con que comparar
+        por_casilla[d["casilla"]].append({
+            "n_guia": d["n_guia"],
+            "convenio": d["convenio"],
+            "vuelo_esperado": datetime.fromisoformat(d["vuelo_esperado"]),
+            "vuelo_real": datetime.fromisoformat(d["vuelo_real"]),
+            "awb": d["awb"],
+            "costo_producto_usd": costo_producto_por_guia.get(ng, 0),
+            "es_empresa": es_empresa_por_guia.get(ng),
+            "usd": usd_por_guia.get(ng) or 957,
+            "afectada_estricto": d["no_volo_estricto"],
+        })
+
+    ventana = timedelta(days=VENTANA_SPLIT_DIAS)
+    casos = []
+    for casilla, gs in por_casilla.items():
+        gs.sort(key=lambda g: g["vuelo_esperado"])
+        for i in range(len(gs)):
+            for j in range(i + 1, len(gs)):
+                a, b = gs[i], gs[j]
+                if (b["vuelo_esperado"] - a["vuelo_esperado"]) > ventana:
+                    break  # gs esta ordenado por vuelo_esperado, no hay mas candidatos cercanos
+                if a["awb"] == b["awb"]:
+                    continue  # fueron en el mismo vuelo -- no es un split
+                combinado = a["costo_producto_usd"] + b["costo_producto_usd"]
+                ambos_persona = a["es_empresa"] == 0 and b["es_empresa"] == 0
+                if (ambos_persona and a["costo_producto_usd"] < UMBRAL_AD_VALOREM_USD
+                        and b["costo_producto_usd"] < UMBRAL_AD_VALOREM_USD
+                        and combinado >= UMBRAL_AD_VALOREM_USD):
+                    tipo = "ad_valorem"
+                elif (a["costo_producto_usd"] < UMBRAL_AGENTE_ADUANA_USD
+                        and b["costo_producto_usd"] < UMBRAL_AGENTE_ADUANA_USD
+                        and combinado >= UMBRAL_AGENTE_ADUANA_USD):
+                    tipo = "agente_aduana"
+                else:
+                    continue
+                primero, segundo = (a, b) if a["vuelo_real"] <= b["vuelo_real"] else (b, a)
+                usd_prom = (a["usd"] + b["usd"]) / 2
+                if tipo == "ad_valorem":
+                    costo_evitado_clp = round(combinado * usd_prom * benchmarks["tasa_ad_valorem_pct"] / 100)
+                else:
+                    costo_evitado_clp = round(benchmarks["costo_agente_usd"] * usd_prom)
+                casos.append({
+                    "casilla": casilla,
+                    "tipo": tipo,
+                    "n_guia_1": primero["n_guia"],
+                    "n_guia_2": segundo["n_guia"],
+                    "convenio": primero["convenio"] or segundo["convenio"],
+                    "valor_combinado_usd": round(combinado, 1),
+                    "dias_extra_espera": (segundo["vuelo_real"] - primero["vuelo_real"]).days,
+                    "costo_evitado_clp_estimado": costo_evitado_clp,
+                    "vuelo_real_primero": primero["vuelo_real"].isoformat(),
+                    "vuelo_real_segundo": segundo["vuelo_real"].isoformat(),
+                    "afectada_estricto_segundo": segundo["afectada_estricto"],
+                })
+    return casos
+
+
 def _pct_at(vals, p):
     v = sorted(x for x in vals if x is not None)
     return round(v[min(len(v) - 1, int(len(v) * p))], 1) if v else None
@@ -590,6 +707,15 @@ def main():
     consolidacion_id_por_guia = {str(r.get("n_guia")): (r.get("consolidacion") or -1) for r in filas_peso}
     consolidada_por_guia = {ng: (cid > 0) for ng, cid in consolidacion_id_por_guia.items()}
     convenio_por_guia = {str(r.get("n_guia")): (r.get("v_codigo_convenio") or "") for r in filas_peso}
+    # Valor declarado (USD) y tipo de cliente -- usados solo para el analisis
+    # del "modelo de agrupacion por umbrales de aduana" (ver mas abajo,
+    # 2026-09-03): Jorge pidio investigar si 2ebox separa DELIBERADAMENTE
+    # guias del mismo cliente en vuelos distintos para que, sumadas, no
+    # crucen los umbrales de ad valorem (USD 500, solo clientes persona) o
+    # agente de aduana obligatorio (USD 3.000, cualquier cliente).
+    costo_producto_por_guia = {str(r.get("n_guia")): (r.get("costo_producto") or 0) for r in filas_peso}
+    es_empresa_por_guia = {str(r.get("n_guia")): r.get("es_empresa") for r in filas_peso}
+    usd_por_guia = {str(r.get("n_guia")): r.get("usd") for r in filas_peso}
     print(f"  {len(peso_por_guia)} pesos descargados ({sum(consolidada_por_guia.values())} son guias de consolidacion)")
 
     # Registro de cada bulto consolidado (tabla `consolidaciones`). Se trae un
@@ -897,6 +1023,23 @@ def main():
         f"{_fr['afectadas_con_armado_lento']['pct']}% vs {_fr['control_con_armado_lento']['pct']}%"
     )
 
+    print("Detectando splits deliberados por umbral de aduana (ad valorem / agente)...")
+    _benchmarks_aduana = _calcular_benchmarks_aduana(filas_peso)
+    _casos_aduana = _detectar_splits_umbral_aduana(
+        detalle, costo_producto_por_guia, es_empresa_por_guia, usd_por_guia, _benchmarks_aduana
+    )
+    print(
+        f"  benchmarks: ad valorem ~{_benchmarks_aduana['tasa_ad_valorem_pct']}% "
+        f"(n={_benchmarks_aduana['muestra_ad_valorem']}), agente aduana ~USD {_benchmarks_aduana['costo_agente_usd']} "
+        f"(n={_benchmarks_aduana['muestra_agente']})"
+    )
+    print(
+        f"  casos detectados: {len(_casos_aduana)} "
+        f"({sum(1 for c in _casos_aduana if c['tipo']=='ad_valorem')} ad valorem, "
+        f"{sum(1 for c in _casos_aduana if c['tipo']=='agente_aduana')} agente aduana) | "
+        f"de esos, ya marcados 'afectada' en el reporte: {sum(1 for c in _casos_aduana if c['afectada_estricto_segundo'])}"
+    )
+
     def bloque_definicion(flag_key, poblacion_filtro=None):
         """Arma el bloque de salida (totales, agregados semana/mes, detalle)
         para una definicion de incidente (flag_key = 'no_volo_estricto' o
@@ -1087,6 +1230,16 @@ def main():
         # cumplimiento de vuelos -- alimenta la pestaña Conclusiones (punto 3)
         # y da contexto a los filtros nuevos de la pestaña Guias afectadas.
         "consolidadas_friccion": _resumen_friccion_consolidacion(detalle),
+        # Modelo de agrupacion por umbrales de aduana (pedido de Jorge,
+        # 2026-09-03) -- pestaña propia, separada del analisis principal
+        # (ver docstring de _detectar_splits_umbral_aduana arriba).
+        "modelo_umbrales_aduana": {
+            "benchmarks": _benchmarks_aduana,
+            "umbral_ad_valorem_usd": UMBRAL_AD_VALOREM_USD,
+            "umbral_agente_aduana_usd": UMBRAL_AGENTE_ADUANA_USD,
+            "ventana_dias": VENTANA_SPLIT_DIAS,
+            "casos": _casos_aduana,
+        },
     }
 
     with open("cumplimiento_vuelos.json", "w", encoding="utf-8") as f:

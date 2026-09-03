@@ -39,6 +39,10 @@ def fmt_kg(n):
     return fmt_n(round(n)) + " kg"
 
 
+def fmt_clp(n):
+    return "$" + fmt_n(round(n))
+
+
 def color_por_pct(pct):
     if pct >= 40:
         return "var(--bad)"
@@ -1379,8 +1383,185 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
 """
 
 
+def build_modelo_aduana():
+    """Pestaña "Modelo Aduana": metodología aparte que Jorge quiere poder
+    CUESTIONAR (2026-09-03) -- 2ebox separa deliberadamente guías del mismo
+    cliente en vuelos distintos cuando, sumadas, cruzarían un umbral de
+    aduana chileno (USD 500 = ad valorem para cliente persona, USD 3.000 =
+    agente de aduana obligatorio para cualquier cliente). Es más fácil de
+    gestionar con el cliente (paga menos), pero puede ser un cuello de
+    botella que infla la tasa de "afectadas" del reporte principal sin ser
+    una falla operativa real. Detección y benchmarks en
+    `_detectar_splits_umbral_aduana()`/`_calcular_benchmarks_aduana()` del
+    extractor -- acá solo se presenta."""
+    m = data["modelo_umbrales_aduana"]
+    casos = list(m["casos"])
+    bench = m["benchmarks"]
+    umbral_ad_valorem = m["umbral_ad_valorem_usd"]
+    umbral_agente = m["umbral_agente_aduana_usd"]
+
+    def clasificar_ejecutiva(conv):
+        if conv in KATHY_CONVENIOS:
+            return "Kathy"
+        if conv in TIARE_CONVENIOS:
+            return "Tiare"
+        return "Otros"
+
+    for c in casos:
+        c["eje"] = clasificar_ejecutiva(c["convenio"] or "")
+
+    total_casos = len(casos)
+    total_dias = sum(c["dias_extra_espera"] for c in casos)
+    prom_dias = round(total_dias / total_casos, 1) if total_casos else 0
+    total_costo_evitado = sum(c["costo_evitado_clp_estimado"] for c in casos)
+    ya_afectadas = sum(1 for c in casos if c["afectada_estricto_segundo"])
+    pct_ya_afectadas = round(ya_afectadas / total_casos * 100, 1) if total_casos else 0
+    n_ad_valorem = sum(1 for c in casos if c["tipo"] == "ad_valorem")
+    n_agente = sum(1 for c in casos if c["tipo"] == "agente_aduana")
+
+    diagrama = explica_diagrama([
+        {"titulo": "2 guías, mismo cliente", "sub": "listas para volar casi juntas"},
+        {"titulo": "Se separan a propósito", "sub": "para que ninguna cruce el umbral sola", "tag": "cliente paga menos", "variante": "proc"},
+        {"titulo": "Una de las 2 espera más", "sub": "hasta el vuelo siguiente disponible", "tag": "cuello de botella", "variante": "off"},
+    ])
+    panel = explica_panel([
+        (
+            "💰", "¿Por qué se hace?",
+            f"Sobre USD {umbral_ad_valorem} de valor declarado, un cliente <b>persona</b> "
+            f"paga ad valorem. Sobre USD {umbral_agente} (cualquier cliente) se "
+            "necesita <b>agente de aduana</b>. Separar las guías del mismo cliente mantiene a "
+            "cada una bajo el umbral — más fácil de gestionar, la mayoría prefiere pagar menos.",
+        ),
+        (
+            "⏳", "¿Qué cuesta en tiempo?",
+            f"{fmt_n(total_casos)} casos detectados en {data['anio_reporte']} (guías del mismo "
+            f"cliente listas con ≤{m['ventana_dias']} días de diferencia, separadas en vuelos "
+            f"distintos). <b>{fmt_n(total_dias)} días</b> de espera extra acumulados — y el "
+            f"<b>{fmt_pct(pct_ya_afectadas)}</b> de estos casos YA cuentan como \"afectada\" en "
+            "el reporte principal, sin ser una falla operativa real.",
+        ),
+        (
+            "💵", "¿Qué evita en plata?",
+            f"Estimado con guías reales que sí cruzaron el umbral: ~{fmt_pct(bench['tasa_ad_valorem_pct'])} "
+            f"de ad valorem, ~USD {fmt_n(bench['costo_agente_usd'])} de agente de aduana "
+            f"(mediana, n={bench['muestra_ad_valorem']} y n={bench['muestra_agente']} guías de "
+            f"referencia). En total, separar evitó un estimado de <b>{fmt_clp(total_costo_evitado)}</b> "
+            "en cargos de aduana durante el año.",
+        ),
+    ])
+
+    comparacion = f"""
+  <div class="explica" style="grid-template-columns:1fr 1fr">
+    <div class="explica-col">
+      <div class="ec-ico">🐌</div>
+      <h4>Con el modelo actual (separar)</h4>
+      <div class="ec-txt">
+        <b>{fmt_n(total_dias)} días</b> extra de espera acumulados en {data['anio_reporte']}
+        ({prom_dias} en promedio por caso).<br><br>
+        <b>{fmt_pct(pct_ya_afectadas)}</b> de estos {fmt_n(total_casos)} casos ya cuentan como
+        "afectada" en el reporte principal — inflando esa tasa sin que sea un problema operativo.<br><br>
+        Costo de aduana evitado (no lo paga el cliente): <b>{fmt_clp(total_costo_evitado)}</b>.
+      </div>
+    </div>
+    <div class="explica-col">
+      <div class="ec-ico">⚡</div>
+      <h4>Sin el modelo (agrupar igual)</h4>
+      <div class="ec-txt">
+        Las guías saldrían en el primer vuelo disponible, sin esperar por el corte de umbral —
+        <b>{fmt_n(total_dias)} días</b> menos de espera acumulada en el año.<br><br>
+        El cliente pagaría ad valorem o agente de aduana: costo adicional estimado
+        <b>{fmt_clp(total_costo_evitado)}</b>, repartido en {fmt_n(total_casos)} casos
+        (~{fmt_clp(round(total_costo_evitado / total_casos)) if total_casos else '$0'} por caso).<br><br>
+        A cambio, {fmt_n(ya_afectadas)} guías dejarían de contar como "afectadas" sin cambiar
+        nada en la operación de vuelos.
+      </div>
+    </div>
+  </div>
+"""
+
+    def fila(c):
+        tipo_txt = f"Ad valorem (USD {umbral_ad_valorem})" if c["tipo"] == "ad_valorem" else f"Agente aduana (USD {fmt_n(umbral_agente)})"
+        afectada_txt = (
+            "<span style='color:var(--bad);font-weight:700'>Sí</span>" if c["afectada_estricto_segundo"]
+            else "<span style='color:var(--ink-faint)'>No</span>"
+        )
+        return (
+            f"<tr data-tipo='{c['tipo']}'>"
+            f"<td data-v='{html.escape(c['casilla'])}'>{html.escape(c['casilla'])}</td>"
+            f"<td data-v='{c['eje']}'>{c['eje']}</td>"
+            f"<td data-v='{c['tipo']}'>{tipo_txt}</td>"
+            f"<td data-v='{c['n_guia_1']}'><a href='https://2020.2ebox.com/guias-hijas/ver/{c['n_guia_1']}' target='_blank' rel='noopener'>{c['n_guia_1']}</a></td>"
+            f"<td data-v='{c['n_guia_2']}'><a href='https://2020.2ebox.com/guias-hijas/ver/{c['n_guia_2']}' target='_blank' rel='noopener'>{c['n_guia_2']}</a></td>"
+            f"<td data-v='{c['valor_combinado_usd']}'>USD {fmt_n(round(c['valor_combinado_usd']))}</td>"
+            f"<td data-v='{c['dias_extra_espera']}'>{c['dias_extra_espera']}</td>"
+            f"<td data-v='{c['costo_evitado_clp_estimado']}'>{fmt_clp(c['costo_evitado_clp_estimado'])}</td>"
+            f"<td data-v='{1 if c['afectada_estricto_segundo'] else 0}'>{afectada_txt}</td></tr>"
+        )
+
+    tabla = "\n".join(fila(c) for c in sorted(casos, key=lambda c: -c["dias_extra_espera"]))
+
+    return f"""
+  {diagrama}
+  {panel}
+
+  <div class="kpis">
+    <div class="kpi bad"><div class="v">{fmt_n(total_casos)}</div><div class="l">Casos detectados ({fmt_n(n_ad_valorem)} ad valorem, {fmt_n(n_agente)} agente)</div></div>
+    <div class="kpi"><div class="v">{fmt_n(total_dias)}</div><div class="l">Días extra de espera acumulados ({prom_dias} promedio)</div></div>
+    <div class="kpi"><div class="v">{fmt_clp(total_costo_evitado)}</div><div class="l">Costo de aduana evitado (estimado)</div></div>
+    <div class="kpi"><div class="v">{fmt_pct(pct_ya_afectadas)}</div><div class="l">Ya cuentan como "afectada" en el reporte</div></div>
+  </div>
+
+  {ejecutivas_kpis_html(casos)}
+
+  <section>
+    <h2>Comparación: con vs sin el modelo</h2>
+    {comparacion}
+  </section>
+
+  <section>
+    <h2>Detalle de casos</h2>
+    <div class="toggle">
+      <button id="btn-aduana-todos" class="active" onclick="filtrarAduana('todos')">Todos</button>
+      <button id="btn-aduana-ad_valorem" onclick="filtrarAduana('ad_valorem')">Ad valorem</button>
+      <button id="btn-aduana-agente_aduana" onclick="filtrarAduana('agente_aduana')">Agente aduana</button>
+    </div>
+    <div class="table-wrap" style="max-height:480px">
+      <table id="tabla-aduana" class="sortable"><thead><tr>
+        <th onclick="ordenarTabla('tabla-aduana',0,'str')">Casilla</th>
+        <th onclick="ordenarTabla('tabla-aduana',1,'str')">Ejecutiva</th>
+        <th onclick="ordenarTabla('tabla-aduana',2,'str')">Tipo de umbral</th>
+        <th onclick="ordenarTabla('tabla-aduana',3,'num')">Guía 1</th>
+        <th onclick="ordenarTabla('tabla-aduana',4,'num')">Guía 2 (la que espera)</th>
+        <th onclick="ordenarTabla('tabla-aduana',5,'num')">Valor combinado</th>
+        <th onclick="ordenarTabla('tabla-aduana',6,'num')">Días extra</th>
+        <th onclick="ordenarTabla('tabla-aduana',7,'num')">Costo evitado</th>
+        <th onclick="ordenarTabla('tabla-aduana',8,'num')">¿Ya "afectada"?</th>
+      </tr></thead>
+      <tbody>{tabla}</tbody></table>
+    </div>
+    <p class="empty-note" id="aduana-empty" style="display:none">Sin casos para este filtro.</p>
+  </section>
+
+  <script>
+    function filtrarAduana(tipo) {{
+      var visibles = 0;
+      document.querySelectorAll('#tabla-aduana tbody tr').forEach(function (tr) {{
+        var mostrar = (tipo === 'todos' || tr.getAttribute('data-tipo') === tipo);
+        tr.style.display = mostrar ? '' : 'none';
+        if (mostrar) visibles++;
+      }});
+      ['todos', 'ad_valorem', 'agente_aduana'].forEach(function (t) {{
+        document.getElementById('btn-aduana-' + t).classList.toggle('active', t === tipo);
+      }});
+      document.getElementById('aduana-empty').style.display = visibles ? 'none' : 'block';
+    }}
+  </script>
+"""
+
+
 seccion_conclusiones = build_conclusiones()
 seccion_capacidad = build_capacidad_vuelos()
+seccion_modelo_aduana = build_modelo_aduana()
 
 seccion_ga_estricto = build_guias_afectadas("estricto", "vuelo exacto", dom_id="ga_estricto")
 seccion_ga_semana = build_guias_afectadas("semana", "misma semana", dom_id="ga_semana")
@@ -1734,6 +1915,7 @@ HTML = f"""<!DOCTYPE html>
     <button id="tab-btn-guias-afectadas" onclick="verPestana('guias-afectadas')">Guías afectadas</button>
     <button id="tab-btn-capacidad" onclick="verPestana('capacidad')">Capacidad de Vuelos</button>
     <button id="tab-btn-conclusiones" onclick="verPestana('conclusiones')">Conclusiones</button>
+    <button id="tab-btn-modelo-aduana" onclick="verPestana('modelo-aduana')">Modelo Aduana</button>
   </div>
 
   <div id="tab-individuales" class="pestana active">{seccion_individuales}</div>
@@ -1741,6 +1923,7 @@ HTML = f"""<!DOCTYPE html>
   <div id="tab-guias-afectadas" class="pestana">{seccion_guias_afectadas}</div>
   <div id="tab-capacidad" class="pestana">{seccion_capacidad}</div>
   <div id="tab-conclusiones" class="pestana">{seccion_conclusiones}</div>
+  <div id="tab-modelo-aduana" class="pestana">{seccion_modelo_aduana}</div>
 
   <details class="foot-note">
     <summary>Notas técnicas y metodología</summary>
@@ -1860,7 +2043,7 @@ HTML = f"""<!DOCTYPE html>
   }})();
 
   function verPestana(scope) {{
-    ['individuales', 'consolidadas', 'guias-afectadas', 'capacidad', 'conclusiones'].forEach(function (s) {{
+    ['individuales', 'consolidadas', 'guias-afectadas', 'capacidad', 'conclusiones', 'modelo-aduana'].forEach(function (s) {{
       document.getElementById('tab-' + s).classList.toggle('active', s === scope);
       document.getElementById('tab-btn-' + s).classList.toggle('active', s === scope);
     }});
