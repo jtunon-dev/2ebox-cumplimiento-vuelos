@@ -1533,21 +1533,28 @@ HTML = f"""<!DOCTYPE html>
     padding: 2px 9px; border-radius: 20px; border: 1px solid; width: fit-content;
   }}
   .ed-arrow {{ display: flex; align-items: center; justify-content: center; font-size: 18px; color: var(--ink-faint); flex: 0 0 auto; padding: 0 2px; }}
-  @media (max-width: 640px) {{ .ed-arrow {{ transform: rotate(90deg); }} }}
+  @media (max-width: 640px) {{
+    .explica-diagrama {{ flex-direction: column; }}
+    .ed-box {{ width: 100%; }}
+    .ed-arrow {{ transform: rotate(90deg); }}
+  }}
   .kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 26px; }}
   .kpi {{ background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }}
   .kpi .v {{ font-family: 'Russo One', system-ui, sans-serif; font-size: 22px; }}
   .kpi .l {{ font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); margin-top: 4px; }}
   .kpi.bad .v {{ color: var(--bad); }}
   section {{ margin-bottom: 30px; }}
-  .toggle {{ display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 3px; margin-bottom: 14px; }}
-  .toggle button {{ font-family: 'Fira Sans', sans-serif; font-size: 12px; font-weight: 600; padding: 7px 16px; border: none; border-radius: 8px; background: transparent; color: var(--ink-faint); cursor: pointer; }}
+  .toggle {{ display: inline-flex; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 3px; margin-bottom: 14px; max-width: 100%; }}
+  .toggle button {{ font-family: 'Fira Sans', sans-serif; font-size: 12px; font-weight: 600; padding: 7px 16px; border: none; border-radius: 8px; background: transparent; color: var(--ink-faint); cursor: pointer; white-space: nowrap; }}
   .toggle button.active {{ background: var(--2e-red); color: white; }}
-  .tabs-principal {{ display: flex; gap: 8px; border-bottom: 1px solid var(--line); margin-bottom: 22px; }}
+  .tabs-principal {{
+    display: flex; gap: 8px; border-bottom: 1px solid var(--line); margin-bottom: 22px;
+    overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin;
+  }}
   .tabs-principal button {{
     font-family: 'Russo One', system-ui, sans-serif; font-size: 13px; font-weight: 400; letter-spacing: .02em;
     padding: 12px 4px; margin-right: 22px; border: none; border-bottom: 3px solid transparent;
-    background: transparent; color: var(--ink-faint); cursor: pointer;
+    background: transparent; color: var(--ink-faint); cursor: pointer; white-space: nowrap; flex-shrink: 0;
   }}
   .tabs-principal button.active {{ color: var(--ink); border-bottom-color: var(--2e-red); }}
   .pestana {{ display: none; }}
@@ -1629,20 +1636,39 @@ HTML = f"""<!DOCTYPE html>
     background: var(--surface-2); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; cursor: pointer;
   }}
   .cap-filtro-fechas button:hover {{ color: var(--ink); border-color: var(--2e-blue-claro); }}
-  .header-row {{ display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 6px; }}
+  .header-row {{ display: flex; align-items: flex-start; justify-content: space-between; gap: 16px 12px; margin-bottom: 6px; flex-wrap: wrap; }}
+  .header-row h1 {{ min-width: 0; }}
+  .header-actions {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }}
   .theme-toggle {{
     display: inline-flex; align-items: center; gap: 6px; font-family: 'Fira Sans', sans-serif; font-size: 11.5px; font-weight: 600;
     padding: 7px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink);
     cursor: pointer; white-space: nowrap; flex-shrink: 0;
   }}
   .theme-toggle:hover {{ border-color: var(--2e-blue-claro); }}
+  .update-badge {{
+    display: inline-flex; align-items: center; gap: 6px; font-family: 'Fira Sans', sans-serif; font-size: 11px; font-weight: 600;
+    padding: 7px 12px; border-radius: 9px; border: 1px solid var(--line); white-space: nowrap; flex-shrink: 0;
+    background: var(--surface); color: var(--ink-faint);
+  }}
+  .update-badge.ok {{ background: rgba(52,199,122,0.14); color: var(--good); border-color: var(--good); }}
+  .update-badge.stale {{ background: rgba(227,32,62,0.12); color: var(--bad); border-color: var(--bad); }}
+  @media (max-width: 480px) {{
+    .app {{ padding: 18px 14px 40px; }}
+    h1 {{ font-size: 17px; }}
+    .kpi .v {{ font-size: 19px; }}
+    table {{ font-size: 11.5px; }}
+    th, td {{ padding: 6px 7px; }}
+  }}
 </style>
 </head>
 <body>
 <div class="app">
   <div class="header-row">
     <h1>Cumplimiento de Vuelos — Guías 2ebox {data['anio_reporte']}</h1>
-    <button class="theme-toggle" id="theme-toggle-btn" onclick="alternarTema()">🌙 Modo oscuro</button>
+    <div class="header-actions">
+      <span class="update-badge" id="update-badge">Actualizado: cargando…</span>
+      <button class="theme-toggle" id="theme-toggle-btn" onclick="alternarTema()">🌙 Modo oscuro</button>
+    </div>
   </div>
   <p class="sub">
     Guías regulares listas para volar (pago + factura en Miami) que resultan afectadas por
@@ -1757,6 +1783,34 @@ HTML = f"""<!DOCTYPE html>
     actualizarBotonTema();
   }}
   actualizarBotonTema();
+
+  // Badge "Actualizado: ..." -- pedido de Jorge (2026-09-03): saber de un
+  // vistazo si el reporte es de hoy. Se calcula en el NAVEGADOR (no al
+  // generar el HTML) para que siga siendo correcto aunque se mire horas o
+  // dias despues de la ultima corrida del pipeline automatico. GENERADO_ISO
+  // viene con tz UTC explicito (ver docstring del extractor) -- new Date()
+  // lo convierte solo a la hora local de quien mira el reporte.
+  (function () {{
+    var el = document.getElementById('update-badge');
+    if (!el) return;
+    var GENERADO_ISO = {json.dumps(data['generado'])};
+    var d = new Date(GENERADO_ISO);
+    if (isNaN(d.getTime())) {{ el.textContent = 'Actualizado: s/d'; return; }}
+    var ahora = new Date();
+    var pad = function (n) {{ return String(n).padStart(2, '0'); }};
+    var fecha = pad(d.getDate()) + '-' + pad(d.getMonth() + 1) + '-' + d.getFullYear();
+    var hora = pad(d.getHours()) + ':' + pad(d.getMinutes());
+    var esHoy = d.getFullYear() === ahora.getFullYear() && d.getMonth() === ahora.getMonth() && d.getDate() === ahora.getDate();
+    if (esHoy) {{
+      el.className = 'update-badge ok';
+      el.textContent = '🟢 Actualizado hoy ' + hora;
+    }} else {{
+      var dias = Math.max(1, Math.round((ahora - d) / 86400000));
+      el.className = 'update-badge stale';
+      el.textContent = '🔴 Desactualizado — ' + fecha + ' ' + hora + ' (hace ' + dias + (dias === 1 ? ' día' : ' días') + ')';
+    }}
+  }})();
+
   function verPestana(scope) {{
     ['individuales', 'consolidadas', 'guias-afectadas', 'capacidad', 'conclusiones'].forEach(function (s) {{
       document.getElementById('tab-' + s).classList.toggle('active', s === scope);

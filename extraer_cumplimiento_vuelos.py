@@ -1010,7 +1010,14 @@ def main():
     capacidad_mensual = calcular_capacidad_mensual(detalle, vuelos)
 
     salida = {
-        "generado": datetime.now().isoformat(),
+        # UTC explicito (no datetime.now() naive) -- el pipeline corre a veces
+        # local (hora Chile) y a veces en GitHub Actions (hora UTC del
+        # runner); si se guarda naive, "generado" significa cosas distintas
+        # segun donde corrio, lo que rompe la comparacion "es de hoy" del
+        # badge de actualizacion en el dashboard (2026-09-03). Con tz UTC
+        # explicito, el navegador del que mira el reporte lo convierte solo
+        # a su hora local via `new Date(iso)`.
+        "generado": datetime.now(timezone.utc).isoformat(),
         "anio_reporte": ANIO_REPORTE,
         "fecha_desde_colchon": FECHA_DESDE,
         "total_vuelos_calendario": len(vuelos),
