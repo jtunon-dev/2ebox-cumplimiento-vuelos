@@ -242,6 +242,111 @@ def barra_capacidad_svg(items, label_fn, key_ingreso, key_podria, width=980, hei
     return "".join(svg)
 
 
+def build_resumen_ejecutivo():
+    """Pestaña "Resumen" (pedido de Jorge, 2026-09-03): la primera hoja, para
+    leer lo esencial de una sola pasada. Muestra los totales (guías / kilos /
+    clientes evaluados en 2026) y las guías afectadas bajo el criterio MÁS
+    PERMISIVO -- "puede saltarse 1 vuelo": afectada solo si se saltó MÁS de un
+    vuelo (no alcanzó ni el suyo ni el siguiente) o todavía no ha volado. Es la
+    lectura dura de "cuántas guías se quedaron de verdad atrás". Los criterios
+    más estrictos viven en las otras pestañas."""
+    b = data["un_vuelo"]
+    ev_g = b["total_evaluables"]
+    ev_kg = b["total_kilos_evaluables"]
+    ev_cl = b["total_clientes_evaluables"]
+    af_g = b["total_incidentes"]
+    af_kg = b["total_kilos"]
+    af_cl = b["total_clientes"]
+
+    pct_g = round(af_g / ev_g * 100, 1) if ev_g else 0
+    pct_kg = round(af_kg / ev_kg * 100, 1) if ev_kg else 0
+    pct_cl = round(af_cl / ev_cl * 100, 1) if ev_cl else 0
+
+    est = data["estricto"]
+    sem = data["semana"]
+    pct_est = round(est["total_incidentes"] / est["total_evaluables"] * 100, 1) if est["total_evaluables"] else 0
+    pct_sem = round(sem["total_incidentes"] / sem["total_evaluables"] * 100, 1) if sem["total_evaluables"] else 0
+
+    filas_mes = "".join(
+        f"<tr><td data-v='{k}'>{mes_label(k)}</td>"
+        f"<td data-v='{v['evaluables']}'>{fmt_n(v['evaluables'])}</td>"
+        f"<td data-v='{v['incidentes']}'>{fmt_n(v['incidentes'])}</td>"
+        f"<td data-v='{v['pct']}' style='color:{color_por_pct(v['pct'])};font-weight:700'>{fmt_pct(v['pct'])}</td>"
+        f"<td data-v='{v['kilos']}'>{fmt_kg(v['kilos'])}</td>"
+        f"<td data-v='{v['clientes']}'>{fmt_n(v['clientes'])}</td></tr>"
+        for k, v in sorted(b["por_mes"].items())
+    )
+
+    return f"""
+  <p class="sub">
+    Lo esencial del reporte en una mirada. El detalle y los criterios más exigentes están en
+    las pestañas siguientes.
+  </p>
+
+  <section>
+    <h2>Cuántas guías se están midiendo — 2026</h2>
+    <p class="sub" style="margin-bottom:14px">
+      Guías regulares (courier) que quedaron listas para volar — con pago y con factura en
+      Miami — y cuyo vuelo correspondiente ya ocurrió. Es el universo completo sobre el que se
+      calcula todo el reporte.
+    </p>
+    <div class="kpis">
+      <div class="kpi"><div class="v">{fmt_n(ev_g)}</div><div class="l">Guías evaluadas</div></div>
+      <div class="kpi"><div class="v">{fmt_kg(ev_kg)}</div><div class="l">Kilos evaluados</div></div>
+      <div class="kpi"><div class="v">{fmt_n(ev_cl)}</div><div class="l">Clientes distintos</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Cuántas resultaron afectadas — con margen de saltarse 1 vuelo</h2>
+    <p class="sub" style="margin-bottom:14px">
+      Una guía cuenta como <b>afectada</b> solo si se <b>saltó más de un vuelo</b> (no alcanzó
+      ni el que le correspondía ni el inmediatamente siguiente), o si todavía no ha volado.
+      Perder el vuelo pero enganchar el siguiente <b>no</b> cuenta acá — es la lectura más
+      exigente de "se quedó de verdad atrás".
+    </p>
+    <div class="kpis">
+      <div class="kpi bad"><div class="v">{fmt_n(af_g)} · {fmt_pct(pct_g)}</div><div class="l">Guías afectadas de {fmt_n(ev_g)}</div></div>
+      <div class="kpi bad"><div class="v">{fmt_kg(af_kg)} · {fmt_pct(pct_kg)}</div><div class="l">Kilos afectados de {fmt_kg(ev_kg)}</div></div>
+      <div class="kpi bad"><div class="v">{fmt_n(af_cl)} · {fmt_pct(pct_cl)}</div><div class="l">Clientes afectados de {fmt_n(ev_cl)}</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Mes a mes</h2>
+    <div class="table-wrap">
+      <table id="tabla-resumen-mes" class="sortable"><thead><tr>
+        <th onclick="ordenarTabla('tabla-resumen-mes',0,'str')">Mes</th>
+        <th onclick="ordenarTabla('tabla-resumen-mes',1,'num')">Guías evaluadas</th>
+        <th onclick="ordenarTabla('tabla-resumen-mes',2,'num')">Afectadas</th>
+        <th onclick="ordenarTabla('tabla-resumen-mes',3,'num')">%</th>
+        <th onclick="ordenarTabla('tabla-resumen-mes',4,'num')">Kilos afectados</th>
+        <th onclick="ordenarTabla('tabla-resumen-mes',5,'num')">Clientes afectados</th>
+      </tr></thead><tbody>{filas_mes}</tbody></table>
+    </div>
+  </section>
+
+  {explica_panel([
+      (
+          "🟢", "Este número (saltarse 1 vuelo)",
+          f"{fmt_n(af_g)} guías ({fmt_pct(pct_g)}). Es el criterio más permisivo — solo "
+          "cuenta a las que no alcanzaron ni su vuelo ni el siguiente.",
+      ),
+      (
+          "🎯", "Criterio \"vuelo exacto\"",
+          f"{fmt_n(est['total_incidentes'])} guías ({fmt_pct(pct_est)}). Cuenta como afectada "
+          "cualquier guía que no subió exactamente a su vuelo, aunque haya tomado el "
+          "siguiente. Pestaña Individuales / Consolidadas / Guías afectadas.",
+      ),
+      (
+          "📅", "Criterio \"misma semana\"",
+          f"{fmt_n(sem['total_incidentes'])} guías ({fmt_pct(pct_sem)}). Punto intermedio: "
+          "cuenta solo si voló en una semana calendario posterior.",
+      ),
+  ])}
+"""
+
+
 def build_capacidad_vuelos():
     """Pestaña "Capacidad de Vuelos" (pedido de Jorge, 2026-09-01, 6ta y
     7ma iteración): capacidad real ingresada por vuelo (tope de lo que
@@ -250,19 +355,21 @@ def build_capacidad_vuelos():
     completo en `calcular_capacidad_vuelos()`/`calcular_capacidad_semanal()`
     del extractor -- ya excluye vuelos de 1 sola guía (carga).
 
+    "Ingresadas" / "kilos ingresados" salen DIRECTO de la guía madre del
+    vuelo en el admin 2ebox (`guia_madres.guia_hijas` y `peso_total`) --
+    los mismos números que ve Jorge en "Lista de guías madres". Antes se
+    reconstruían sumando `detalle`, lo que los subestimaba (sólo guías
+    evaluables + `guia_hijas.peso` incompleto) e inflaba el excedente
+    (corregido 2026-09-03).
+
     OJO con la semántica del %: corregido 2026-09-01 a pedido de Jorge --
     el 100% de la capacidad de un vuelo NO es "podría" (la cola de espera),
     es "ingreso" (lo que efectivamente voló), porque ESA es la restricción
     real que impone la aerolínea ese vuelo puntual. "Podría" es la DEMANDA
-    (cuántas guías había listas); si demanda > capacidad, el sobrante es
-    "excedente" (demanda que no alcanzó a subir, no "capacidad sin usar").
-    Por eso `pct_capacidad = podria / ingreso * 100` -- 100% = la demanda
-    calzó exacto con la capacidad del vuelo (sin excedente); más de 100% =
-    hubo más guías listas que cupo. Puede darménos de 100% en semanas con
-    varios clientes de crédito (ver docstring del extractor: esas guías
-    cuentan en 'ingreso' pero no pasan por la cola de 'podria', asi que a
-    veces el ingreso real supera a la demanda rastreada -- no es un error,
-    es cobertura parcial de la cola de espera)."""
+    = lo que voló + las guías evaluables que ya estaban listas y no
+    alcanzaron a subir (el excedente). Por construcción podría >= ingreso
+    siempre. `pct_capacidad = podria / ingreso * 100` -- 100% = el vuelo se
+    llevó toda la demanda lista; más de 100% = quedó demanda esperando."""
     cap = data.get("capacidad_por_vuelo", [])
     # capacidad_por_semana viene de una simulacion propia a nivel semanal
     # (calcular_capacidad_semanal en el extractor) -- NO es un rollup del
@@ -365,7 +472,8 @@ def build_capacidad_vuelos():
   {explica_panel([
       (
           "✈️", "\"Ingresó\" = 100% de capacidad",
-          "Cuántas guías efectivamente subieron a ese vuelo. Es el tope real — la "
+          "Cuántas guías y kilos efectivamente subieron a ese vuelo, tomado directo "
+          "de la guía madre del vuelo en el admin 2ebox. Es el tope real — la "
           "restricción que impuso la aerolínea ese día puntual.",
       ),
       (
@@ -891,14 +999,12 @@ def build_conclusiones():
     </p>
     <p class="sub" style="margin-bottom:14px">
       <b>Ojo con los kilos específicamente:</b> a diferencia del conteo de guías, los kilos
-      excedentes están muy concentrados en unos pocos paquetes atípicamente pesados (hasta
-      1.638 kg — la mediana real es ~2 kg) que quedan varias semanas seguidas sin volar y se
-      suman una y otra vez mientras siguen esperando — solo los 10 paquetes más pesados del año
-      explican ~36% del total de kilos afectados. Para decidir si hace falta un vuelo extra
-      <b>regular a la semana</b>, el conteo de guías (pestaña "Capacidad de Vuelos") es la señal
-      más confiable; los kilos de abajo dan el orden de magnitud, pero un puñado de paquetes
-      pesados puntuales pueden inflar el total sin que sea un problema de capacidad semanal
-      recurrente.
+      excedentes tienden a concentrarse en unos pocos paquetes atípicamente pesados (la mediana
+      real es ~2 kg) que quedan varias semanas seguidas sin volar y se suman una y otra vez
+      mientras siguen esperando. Para decidir si hace falta un vuelo extra <b>regular a la
+      semana</b>, el conteo de guías (pestaña "Capacidad de Vuelos") es la señal más confiable;
+      los kilos de abajo dan el orden de magnitud, pero un puñado de paquetes pesados puntuales
+      pueden inflar el total sin que sea un problema de capacidad semanal recurrente.
     </p>
     <div class="kpis">
       <div class="kpi bad"><div class="v">{fmt_kg(total_kg_exced)}</div><div class="l">Kilos excedentes acumulados (2026)</div></div>
@@ -1060,6 +1166,30 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
             ve_dt = _parse_iso(r["vuelo_esperado"])
             vr_dt = _parse_iso(r["vuelo_real"])
             motivo, categoria, saltados, dias = _dato_blando(ve_dt, vr_dt)
+            if scope == "margen" and vr_dt is not None:
+                # Bajo "margen" una guía puede estar afectada por dos motivos
+                # distintos: se saltó más de 1 vuelo, O quedó lista >3 días
+                # antes de volar (aunque haya subido a su vuelo exacto). El
+                # texto/categoría de _dato_blando() ("saltó N vuelos") no
+                # aplica al segundo caso -- se reescriben acá.
+                atr = r.get("atraso_lista_dias")
+                atr_txt = (
+                    f"{atr:.1f} días".replace(".", ",")
+                    if atr is not None else "varios días"
+                )
+                if saltados <= 1:
+                    categoria = "Lista >3 días antes de volar"
+                    base = "en su vuelo exacto" if saltados == 0 else "saltándose 1 vuelo"
+                    motivo = (
+                        f"Voló {base}, pero quedó lista {atr_txt} antes de subirse "
+                        f"(tope del criterio: 3 días)."
+                    )
+                else:
+                    categoria = "Saltó 2+ vuelos"
+                    motivo = (
+                        f"Se saltó {saltados} vuelos antes de subirse"
+                        + (f" y quedó lista {atr_txt} antes de volar." if atr is not None else ".")
+                    )
         else:
             # No afectada -- "motivo" no aplica (no se subieron KPIs de por
             # qué, porque no hay atraso que explicar). No cuesta calcular
@@ -1107,7 +1237,11 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     convenios_ordenados = sorted(convenio_counts.items(), key=lambda kv: -kv[1])
     ejecutiva_counts = Counter(r["eje"] for r in afectadas_todas)
     motivo_counts = Counter(r["mot"] for r in afectadas_todas)
-    ORDEN_MOTIVOS = ["Saltó 1 vuelo", "Saltó 2 vuelos", "Saltó 3+ vuelos", "Aún no vuela"]
+    ORDEN_MOTIVOS = (
+        ["Lista >3 días antes de volar", "Saltó 2+ vuelos", "Aún no vuela"]
+        if scope == "margen"
+        else ["Saltó 1 vuelo", "Saltó 2 vuelos", "Saltó 3+ vuelos", "Aún no vuela"]
+    )
     motivos_presentes = [m for m in ORDEN_MOTIVOS if motivo_counts.get(m)]
 
     pob_counts = Counter(r["pob"] for r in afectadas_todas)
@@ -1168,6 +1302,23 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         )
 
     datos_json = json.dumps(filas, ensure_ascii=False).replace("</", "<\\/")
+
+    # --- Detalle mensual/semanal del TOTAL de guías afectadas (pedido de
+    # Jorge, 2026-09-03): la misma tabla que muestra Individuales en su
+    # sección "Detalle", pero sobre data[scope] = individuales + consolidadas
+    # juntas (que es exactamente la población de esta pestaña). Fija, sin los
+    # filtros de la izquierda. Reusa tabla_html() y las funciones JS globales
+    # verTabla()/ordenarTabla().
+    det_id = f"gadet-{sfx}"
+    bloque_total = data[scope]
+    det_tabla_mensual = tabla_html(list(bloque_total["por_mes"].items()), mes_label, semanal=False)
+    det_tabla_semanal = tabla_html(list(bloque_total["por_semana"].items()), semana_label, semanal=True)
+    det_tot = (
+        f"{fmt_n(bloque_total['total_incidentes'])} guías afectadas de "
+        f"{fmt_n(bloque_total['total_evaluables'])} evaluadas · "
+        f"{fmt_kg(bloque_total['total_kilos'])} de {fmt_kg(bloque_total['total_kilos_evaluables'])} · "
+        f"{fmt_n(bloque_total['total_clientes'])} de {fmt_n(bloque_total['total_clientes_evaluables'])} clientes"
+    )
 
     return f"""
   <p class="sub">
@@ -1240,6 +1391,47 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
       <p class="empty-note" id="ga-empty-{sfx}" style="display:none">Sin guías para este filtro.</p>
     </div>
   </div>
+
+  <section style="margin-top:26px">
+    <h2>Detalle — total de guías afectadas ({titulo_bloque})</h2>
+    <p class="sub" style="margin-bottom:12px">
+      Resumen fijo de <b>todas</b> las guías afectadas de 2026 (individuales + consolidadas
+      juntas), sin aplicar los filtros de arriba. Total del período: {det_tot}.
+      "% Kilos" = kilos afectados sobre kilos evaluados de ese período; "Clientes" = clientes
+      únicos con al menos una guía afectada.
+    </p>
+    <div class="toggle">
+      <button id="btn-{det_id}-tabla-semanal" class="active" onclick="verTabla('{det_id}','semanal')">Semanal</button>
+      <button id="btn-{det_id}-tabla-mensual" onclick="verTabla('{det_id}','mensual')">Mensual</button>
+    </div>
+    <div class="table-wrap">
+      <div id="view-{det_id}-tabla-semanal" class="view active">
+        <table id="tabla-{det_id}-semanal" class="sortable"><thead><tr>
+          <th onclick="ordenarTabla('tabla-{det_id}-semanal',0,'num')">N° Semana</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-semanal',1,'str')">Semana (lunes)</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-semanal',2,'num')">Guías evaluadas</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-semanal',3,'num')">Afectadas</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-semanal',4,'num')">%</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-semanal',5,'num')">Kilos</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-semanal',6,'num')">% Kilos</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-semanal',7,'num')">Clientes</th>
+        </tr></thead>
+        <tbody>{det_tabla_semanal}</tbody></table>
+      </div>
+      <div id="view-{det_id}-tabla-mensual" class="view">
+        <table id="tabla-{det_id}-mensual" class="sortable"><thead><tr>
+          <th onclick="ordenarTabla('tabla-{det_id}-mensual',0,'str')">Mes</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-mensual',1,'num')">Guías evaluadas</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-mensual',2,'num')">Afectadas</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-mensual',3,'num')">%</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-mensual',4,'num')">Kilos</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-mensual',5,'num')">% Kilos</th>
+          <th onclick="ordenarTabla('tabla-{det_id}-mensual',6,'num')">Clientes</th>
+        </tr></thead>
+        <tbody>{det_tabla_mensual}</tbody></table>
+      </div>
+    </div>
+  </section>
 
   <script>
   (function () {{
@@ -1559,12 +1751,16 @@ def build_modelo_aduana():
 """
 
 
+seccion_resumen = build_resumen_ejecutivo()
 seccion_conclusiones = build_conclusiones()
 seccion_capacidad = build_capacidad_vuelos()
 seccion_modelo_aduana = build_modelo_aduana()
 
 seccion_ga_estricto = build_guias_afectadas("estricto", "vuelo exacto", dom_id="ga_estricto")
 seccion_ga_semana = build_guias_afectadas("semana", "misma semana", dom_id="ga_semana")
+seccion_ga_margen = build_guias_afectadas(
+    "margen", "margen 3 días / máx. 1 vuelo saltado", dom_id="ga_margen"
+)
 seccion_guias_afectadas = build_wrapper_subtabs(
     "guiasaf",
     seccion_ga_estricto,
@@ -1583,12 +1779,22 @@ seccion_guias_afectadas = build_wrapper_subtabs(
             "nunca voló.",
         ),
         (
-            "➕", "Es la suma de las 2 pestañas",
+            "⏱️", "Margen 3 días / 1 vuelo",
+            "No cuenta como afectada solo si cumple LOS DOS topes: voló dentro de 3 días "
+            "desde que quedó lista (pago + factura) <b>y</b> se saltó como máximo 1 vuelo. "
+            "Si incumple cualquiera de los dos, cuenta como afectada — se aplica el tope más "
+            "restrictivo. Ojo: puede marcar guías que volaron en su vuelo exacto pero "
+            "quedaron listas más de 3 días antes (vuelos son 2 por semana).",
+        ),
+        (
+            "➕", "Es la suma de las 2 pestañas de población",
             "Esta tabla junta individuales + consolidadas — el total siempre coincide con "
             "sumar Individuales y Consolidadas por separado (puedes comprobarlo con el "
             "filtro \"Población\").",
         ),
     ]),
+    contenido_neto=seccion_ga_margen,
+    label_neto="Margen 3d / 1 vuelo",
 )
 
 seccion_estricto = build_seccion(
@@ -1901,16 +2107,18 @@ HTML = f"""<!DOCTYPE html>
   </div>
   <p class="sub">
     Guías regulares listas para volar (pago + factura en Miami) que resultan afectadas por
-    demoras de vuelo. La pestaña <b>Individuales</b> y la pestaña <b>Consolidadas</b> (varias
-    guías originales fundidas en una sola en bodega, con un patrón de espera distinto por
-    naturaleza) miden lo mismo con los mismos dos criterios ("vuelo exacto" / "misma semana",
-    elegibles adentro de cada una), aplicados a cada población por separado. El incidente
-    siempre se cuenta en la semana/mes del vuelo que le correspondía (donde se generó el
-    atraso), no en el que finalmente voló.
+    demoras de vuelo. Empieza por la pestaña <b>Resumen</b> para lo esencial. La pestaña
+    <b>Individuales</b> y la pestaña <b>Consolidadas</b> (varias guías originales fundidas en
+    una sola en bodega, con un patrón de espera distinto por naturaleza) miden lo mismo con
+    los mismos dos criterios ("vuelo exacto" / "misma semana", elegibles adentro de cada una),
+    aplicados a cada población por separado; <b>Guías afectadas</b> agrega un tercer criterio
+    ("margen 3 días / 1 vuelo"). El incidente siempre se cuenta en la semana/mes del vuelo que
+    le correspondía (donde se generó el atraso), no en el que finalmente voló.
   </p>
 
   <div class="tabs-principal">
-    <button id="tab-btn-individuales" class="active" onclick="verPestana('individuales')">Individuales</button>
+    <button id="tab-btn-resumen" class="active" onclick="verPestana('resumen')">Resumen</button>
+    <button id="tab-btn-individuales" onclick="verPestana('individuales')">Individuales</button>
     <button id="tab-btn-consolidadas" onclick="verPestana('consolidadas')">Consolidadas</button>
     <button id="tab-btn-guias-afectadas" onclick="verPestana('guias-afectadas')">Guías afectadas</button>
     <button id="tab-btn-capacidad" onclick="verPestana('capacidad')">Capacidad de Vuelos</button>
@@ -1918,7 +2126,8 @@ HTML = f"""<!DOCTYPE html>
     <button id="tab-btn-modelo-aduana" onclick="verPestana('modelo-aduana')">Modelo Aduana</button>
   </div>
 
-  <div id="tab-individuales" class="pestana active">{seccion_individuales}</div>
+  <div id="tab-resumen" class="pestana active">{seccion_resumen}</div>
+  <div id="tab-individuales" class="pestana">{seccion_individuales}</div>
   <div id="tab-consolidadas" class="pestana">{seccion_consolidadas}</div>
   <div id="tab-guias-afectadas" class="pestana">{seccion_guias_afectadas}</div>
   <div id="tab-capacidad" class="pestana">{seccion_capacidad}</div>
@@ -2043,7 +2252,7 @@ HTML = f"""<!DOCTYPE html>
   }})();
 
   function verPestana(scope) {{
-    ['individuales', 'consolidadas', 'guias-afectadas', 'capacidad', 'conclusiones', 'modelo-aduana'].forEach(function (s) {{
+    ['resumen', 'individuales', 'consolidadas', 'guias-afectadas', 'capacidad', 'conclusiones', 'modelo-aduana'].forEach(function (s) {{
       document.getElementById('tab-' + s).classList.toggle('active', s === scope);
       document.getElementById('tab-btn-' + s).classList.toggle('active', s === scope);
     }});

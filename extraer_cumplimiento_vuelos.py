@@ -214,7 +214,7 @@ FIELDS_GUIA_HIJAS = (
     "n_guia,peso,consolidacion,v_codigo_convenio,"
     "costo_producto,es_empresa,derechos,costo_agente,usd"
 )
-FIELDS_GUIA_MADRES = "id,awb,flight_date,flight_number,tipo_transporte,items,fecha_creacion"
+FIELDS_GUIA_MADRES = "id,awb,flight_date,flight_number,tipo_transporte,items,guia_hijas,peso_total,fecha_creacion"
 FECHA_DESDE = "2025-12-15"
 ANIO_REPORTE = 2026
 # Dias entre que se crea el registro de la consolidacion (bulto armado) y que
@@ -230,6 +230,17 @@ UMBRAL_ARMADO_LENTO_DIAS = 3
 # mismo dia. Confirmado por Jorge, 2026-09-02 (ver "Correccion de fondo (3)"
 # en el docstring del modulo).
 CORTE_MANIFIESTO_HORA = 12
+# Criterio "margen" (pedido de Jorge, 2026-09-03): un tercer criterio de
+# "afectada", ademas de "vuelo exacto" y "misma semana". Una guia NO cuenta
+# como afectada SOLO si cumple LOS DOS topes a la vez:
+#   (A) volo dentro de MARGEN_MAX_DIAS dias desde que quedo "lista para volar"
+#       (max(primer pago, factura en Miami));
+#   (B) se salto como maximo MARGEN_MAX_VUELOS_SALTADOS vuelo del calendario
+#       (vuelos_saltados <= 1 => alcanzo su vuelo o el inmediatamente siguiente).
+# Incumplir cualquiera de los dos -> afectada. "La que de menor margen entre
+# ambas opciones combinadas" = se aplica el tope mas restrictivo para cada guia.
+MARGEN_MAX_DIAS = 3
+MARGEN_MAX_VUELOS_SALTADOS = 1
 
 
 def noco_fetch_all(table_id, where="", fields="", page_size=1000):
@@ -294,58 +305,39 @@ def lunes_de_semana(dt):
 
 
 def calcular_capacidad_vuelos(detalle, vuelos):
-    """Capacidad por vuelo (pedido de Jorge, 2026-09-01, 6ta iteracion):
-    'tope de lo que se ingreso' (guias que efectivamente volaron en ese
-    vuelo) vs 'lo que se podria haber ingresado' (tamano de la cola de
-    guias YA listas -- pago+factura -- que todavia no habian volado, justo
-    antes de que ese vuelo saliera). La cola incluye tanto a las guias que
-    SI abordan ese vuelo como a las que quedan esperando uno posterior --
-    la brecha (podria - ingreso) es capacidad que ese vuelo especifico dejo
-    sin usar. Ya excluye vuelos de 1 sola guia (carga) porque `vuelos` ya
-    viene filtrado asi desde el calculo del calendario.
+    """Capacidad por vuelo (pedido de Jorge, 2026-09-01, 6ta iteracion;
+    reescrito 2026-09-03).
 
-    Nota: 'ingreso' (n_guias, kg) se calcula de nuevo aqui recorriendo
-    `detalle` completo por vuelo_real -- no reutiliza vuelos[]['n_guias']
-    directamente porque aqui tambien necesitamos los kilos por vuelo, que
-    el calendario no trae.
+    Dos numeros por vuelo:
 
-    Invariante que SIEMPRE debe cumplirse: podria >= ingreso (si X guias
-    volaron, esas X ya estaban "listas" por definicion -- no puede haber
-    menos demanda que capacidad realizada). El caso credito (guia que
-    broto -- por cualquier canal -- ANTES de que su pago quedara
-    registrado) se saca de la cola PERSISTENTE para no quedar fantasma
-    inflando vuelos futuros, pero igual se suma al 'podria' del vuelo
-    puntual en el que broto -- si no, quedaba contando menos demanda que
-    capacidad realizada en ese vuelo, lo cual no tiene sentido (confirmado
-    por Jorge, 2026-09-01).
+    - "ingresadas" / "kilos ingresados" = la carga REAL del vuelo, tal cual
+      la muestra el admin 2ebox: `guia_madres.guia_hijas` (N de guias en el
+      AWB) y `guia_madres.peso_total` (kg totales). Viene precalculada en
+      `vuelos[]["n_ingreso_real"] / ["kg_ingreso_real"]`. IMPORTANTE: hasta
+      2026-09-03 esto se reconstruia sumando `detalle` por `vuelo_real`, lo
+      que lo subestimaba fuerte -- `detalle` solo tiene guias evaluables
+      (con pago+factura) y `guia_hijas.peso` viene incompleto. Ej. senalado
+      por Jorge: el vuelo 605-00715831 tiene 56 guias / 436,9 kg en el
+      sistema y la tabla mostraba 50 / 222 kg, inflando el excedente.
 
-    Bug real encontrado y corregido 2026-09-01 (2da vuelta): la cola
-    agregaba/sacaba guias usando `vuelo_real` (que queda en None para
-    despachos de CARGA, guias de 1 sola guia, excluidas a proposito del
-    calendario de vuelos regulares). Eso hacia que una guia despachada por
-    carga quedara "fantasma" en la cola PARA SIEMPRE -- nunca se sacaba,
-    porque su vuelo_real nunca iguala al ts de ningun vuelo regular. Como
-    la carga a veces es flete pesado (cientos de kg), kg_podria se inflaba
-    sin limite mes a mes (llegaba a mas de 8.000 kg por vuelo hacia
-    agosto). Fix: la cola usa `despacho_cualquiera` (cualquier canal,
-    incluida carga) para decidir cuando una guia deja de estar "esperando"
-    -- una guia despachada por carga sale de la cola igual, aunque no
-    cuente como `ingreso` de ningun vuelo regular (eso sigue viniendo solo
-    de `vuelo_real`, sin cambios)."""
-    ingreso_por_vuelo = defaultdict(lambda: {"n": 0, "kg": 0.0})
-    guias_por_vuelo_real = defaultdict(list)
-    for d in detalle:
-        if d["vuelo_real"]:
-            b = ingreso_por_vuelo[d["vuelo_real"]]
-            b["n"] += 1
-            b["kg"] += d["peso"] or 0
-            guias_por_vuelo_real[d["vuelo_real"]].append(d)
+    - "podrian ingresar" / "kilos podrian" = lo que efectivamente se subio
+      (arriba) MAS las guias evaluables que ya estaban listas (pago+factura)
+      antes de que saliera este vuelo y que NO alcanzaron a subir a el
+      (siguen en cola despues de que despacha). Esa segunda parte es el
+      "excedente": demanda lista que este vuelo dejo pasar. Por construccion
+      podria >= ingreso siempre.
 
+    La cola de evaluables usa `despacho_cualquiera` (cualquier canal,
+    incluida CARGA) para decidir cuando una guia deja de estar esperando,
+    para que una guia despachada por carga no quede fantasma inflando la
+    cola de vuelos futuros (bug corregido 2026-09-01). El caso credito
+    (guia que broto ANTES de quedar "lista") no entra a la cola persistente
+    -- ya salio, no compite por cupo."""
     guia_por_id = {d["n_guia"]: d for d in detalle}
     guias_por_lista = sorted(detalle, key=lambda d: d["fecha_lista"])
     ptr = 0
     n_total = len(guias_por_lista)
-    pendientes = {}  # n_guia -> peso
+    pendientes = {}  # n_guia -> peso  (evaluables listas que aun no despachan)
 
     resultado = []
     for v in vuelos:
@@ -353,45 +345,36 @@ def calcular_capacidad_vuelos(detalle, vuelos):
         while ptr < n_total and datetime.fromisoformat(guias_por_lista[ptr]["fecha_lista"]) <= v["ts"]:
             d = guias_por_lista[ptr]
             ptr += 1
-            # Caso credito: broto (por cualquier canal) ANTES de quedar
-            # "lista" -- si se agrega igual a la cola PERSISTENTE, nunca se
-            # saca (su despacho ya quedo atras cronologicamente) y queda
-            # como fantasma. No compite por cupo de ningun vuelo futuro, se
-            # excluye de `pendientes` -- pero se cuenta igual en el
-            # 'podria' de SU PROPIO vuelo mas abajo si corresponde.
             desp = d["despacho_cualquiera"]
             if desp and desp < d["fecha_lista"]:
-                continue
+                continue  # caso credito: broto antes de estar lista, no compite por cupo
             pendientes[d["n_guia"]] = d["peso"] or 0
 
-        # guias que vuelan en ESTE vuelo pero quedaron fuera de la cola
-        # persistente (caso credito) -- se suman aqui para no romper el
-        # invariante podria >= ingreso, sin persistir en `pendientes`.
-        credito_este_vuelo = [d for d in guias_por_vuelo_real.get(ts_iso, []) if d["n_guia"] not in pendientes]
-
-        n_podria = len(pendientes) + len(credito_este_vuelo)
-        kg_podria = round(sum(pendientes.values()) + sum(d["peso"] or 0 for d in credito_este_vuelo), 1)
-        ingreso = ingreso_por_vuelo[ts_iso]
-
-        resultado.append({
-            "ts": ts_iso,
-            "awb": v.get("awb", ""),
-            "aerolinea": v.get("aerolinea", ""),
-            "n_ingreso": ingreso["n"],
-            "kg_ingreso": round(ingreso["kg"], 1),
-            "n_podria": n_podria,
-            "kg_podria": kg_podria,
-        })
-
-        # sacar de la cola a TODAS las guias que ya salieron por cualquier
-        # canal hasta este punto (vuelo regular O carga) -- no solo las que
-        # volaron en ESTE vuelo puntual.
+        # Sacar de la cola a todas las guias evaluables que ya despacharon
+        # (por cualquier canal) hasta este vuelo, incluidas las que suben a
+        # ESTE vuelo -- ya estan contadas en la carga real de abajo. Lo que
+        # queda en `pendientes` es demanda lista que este vuelo dejo pasar.
         resueltas = [
             ng for ng in pendientes
             if guia_por_id[ng]["despacho_cualquiera"] and guia_por_id[ng]["despacho_cualquiera"] <= ts_iso
         ]
         for ng in resueltas:
             del pendientes[ng]
+
+        n_ingreso = v.get("n_ingreso_real", 0)
+        kg_ingreso = round(v.get("kg_ingreso_real", 0), 1)
+        n_excedente = len(pendientes)
+        kg_excedente = round(sum(pendientes.values()), 1)
+
+        resultado.append({
+            "ts": ts_iso,
+            "awb": v.get("awb", ""),
+            "aerolinea": v.get("aerolinea", ""),
+            "n_ingreso": n_ingreso,
+            "kg_ingreso": kg_ingreso,
+            "n_podria": n_ingreso + n_excedente,
+            "kg_podria": round(kg_ingreso + kg_excedente, 1),
+        })
 
     return resultado
 
@@ -412,32 +395,24 @@ def _calcular_capacidad_por_periodo(detalle, vuelos, clave_fn, nombre_clave):
     CUALQUIER vuelo de ese periodo.
 
     Invariante (igual que calcular_capacidad_vuelos()): podria >= ingreso
-    siempre -- las guias "caso credito" (broto -- por cualquier canal --
-    ANTES de quedar "lista", confirmado por Jorge que si pueden volar sin
-    haber pagado) que quedan fuera de la cola persistente igual se suman
-    al 'podria' del periodo en que efectivamente volaron, sin persistir en
-    la cola hacia periodos futuros.
+    siempre, por construccion -- "podria" = carga real del periodo (suma de
+    guia_madres) + guias evaluables que quedaron esperando despues del
+    ULTIMO vuelo del periodo (excedente).
 
-    Mismo fix que calcular_capacidad_vuelos() (2026-09-01, 2da vuelta): la
-    cola usa `despacho_cualquiera` (no `vuelo_real`) para decidir cuando
-    una guia deja de estar "esperando" -- una guia despachada por carga
-    (1 sola guia, excluida del calendario de vuelos regulares) sale de la
-    cola igual, aunque no cuente como `ingreso` de ningun vuelo regular.
-    Sin esto, la carga (a veces flete pesado) quedaba fantasma en la cola
-    para siempre e inflaba kg_podria sin limite.
+    La cola de evaluables usa `despacho_cualquiera` (no `vuelo_real`) para
+    decidir cuando una guia deja de estar "esperando" -- una guia
+    despachada por carga sale de la cola igual, aunque no cuente como
+    ingreso de ningun vuelo regular. Sin esto, la carga (a veces flete
+    pesado) quedaba fantasma en la cola para siempre e inflaba kg_podria
+    (bug corregido 2026-09-01).
+
+    "ingresado" del periodo = suma de la carga REAL de cada vuelo
+    (guia_madres.guia_hijas / peso_total), no la reconstruccion desde
+    `detalle` -- ver nota en calcular_capacidad_vuelos() (2026-09-03).
 
     clave_fn(datetime) -> clave de periodo (comparable/ordenable).
     nombre_clave: nombre del campo de salida para esa clave (ej. "semana"
     o "mes")."""
-    ingreso_por_vuelo = defaultdict(lambda: {"n": 0, "kg": 0.0})
-    guias_por_vuelo_real = defaultdict(list)
-    for d in detalle:
-        if d["vuelo_real"]:
-            b = ingreso_por_vuelo[d["vuelo_real"]]
-            b["n"] += 1
-            b["kg"] += d["peso"] or 0
-            guias_por_vuelo_real[d["vuelo_real"]].append(d)
-
     periodos_vuelos = {}
     for v in vuelos:
         clave = clave_fn(v["ts"])
@@ -461,32 +436,11 @@ def _calcular_capacidad_por_periodo(detalle, vuelos, clave_fn, nombre_clave):
                 continue
             pendientes[d["n_guia"]] = d["peso"] or 0
 
-        # guias "caso credito" que vuelan en ALGUN vuelo de este periodo
-        # pero quedaron fuera de la cola persistente -- se suman aqui para
-        # no romper el invariante podria >= ingreso.
-        credito_este_periodo = [
-            d for v in vuelos_periodo
-            for d in guias_por_vuelo_real.get(v["ts"].isoformat(), [])
-            if d["n_guia"] not in pendientes
-        ]
-
-        n_podria = len(pendientes) + len(credito_este_periodo)
-        kg_podria = round(sum(pendientes.values()) + sum(d["peso"] or 0 for d in credito_este_periodo), 1)
-        n_ingreso = sum(ingreso_por_vuelo[v["ts"].isoformat()]["n"] for v in vuelos_periodo)
-        kg_ingreso = round(sum(ingreso_por_vuelo[v["ts"].isoformat()]["kg"] for v in vuelos_periodo), 1)
-
-        resultado.append({
-            nombre_clave: clave,
-            "ts_final": ts_final.isoformat(),
-            "n_vuelos": len(vuelos_periodo),
-            "n_ingreso": n_ingreso,
-            "kg_ingreso": kg_ingreso,
-            "n_podria": n_podria,
-            "kg_podria": kg_podria,
-        })
-
-        # sacar de la cola a TODAS las guias que ya salieron por cualquier
-        # canal hasta el final de este periodo (vuelo regular O carga).
+        # Sacar de la cola a todas las guias evaluables que ya despacharon
+        # (cualquier canal) hasta el final del periodo -- incluidas las que
+        # volaron en algun vuelo de ESTE periodo (ya contadas en la carga
+        # real). Lo que queda en `pendientes` es el excedente: demanda lista
+        # que ningun vuelo del periodo alcanzo a subir.
         ts_final_iso = ts_final.isoformat()
         resueltas = [
             ng for ng in pendientes
@@ -494,6 +448,21 @@ def _calcular_capacidad_por_periodo(detalle, vuelos, clave_fn, nombre_clave):
         ]
         for ng in resueltas:
             del pendientes[ng]
+
+        n_ingreso = sum(v.get("n_ingreso_real", 0) for v in vuelos_periodo)
+        kg_ingreso = round(sum(v.get("kg_ingreso_real", 0) for v in vuelos_periodo), 1)
+        n_excedente = len(pendientes)
+        kg_excedente = round(sum(pendientes.values()), 1)
+
+        resultado.append({
+            nombre_clave: clave,
+            "ts_final": ts_final.isoformat(),
+            "n_vuelos": len(vuelos_periodo),
+            "n_ingreso": n_ingreso,
+            "kg_ingreso": kg_ingreso,
+            "n_podria": n_ingreso + n_excedente,
+            "kg_podria": round(kg_ingreso + kg_excedente, 1),
+        })
 
     return resultado
 
@@ -748,6 +717,17 @@ def main():
             "aerolinea": r.get("flight_number") or "",
             "tipo_transporte": r.get("tipo_transporte") or "",
             "items": r.get("items") or 0,
+            # Totales REALES del vuelo, tal cual los muestra el admin 2ebox
+            # (guia_madres.guia_hijas = N de guias en el AWB, peso_total = kg
+            # totales cargados). Se usan como "guias/kilos ingresados" en la
+            # tabla de capacidad -- reconstruirlos sumando `detalle` los
+            # subestimaba, porque `detalle` solo incluye guias evaluables
+            # (con pago+factura) y usa guia_hijas.peso, que viene incompleto
+            # (pedido de Jorge, 2026-09-03: el vuelo 605-00715831 tiene 56
+            # guias / 436,9 kg en el sistema y salia 50 / 222 kg en la tabla,
+            # inflando el excedente).
+            "n_guias_real": r.get("guia_hijas") or r.get("items") or 0,
+            "kg_total": r.get("peso_total") or 0,
         }
         for r in filas_madres
         if r.get("id") is not None
@@ -811,7 +791,18 @@ def main():
             continue  # guia_madre aun no ha despachado -- todavia no es un vuelo del calendario
         ts = min(despachos)
         info = madres_info[id_madre]
-        vuelos.append({"ts": ts, "n_guias": len(despachos), "awb": info["awb"], "aerolinea": info["aerolinea"]})
+        vuelos.append({
+            "ts": ts,
+            "n_guias": len(despachos),
+            "awb": info["awb"],
+            "aerolinea": info["aerolinea"],
+            # Carga REAL del vuelo (guia_madre) -- lo que efectivamente se
+            # subio, incluidas las guias no evaluables (credito, sin factura
+            # propia, guias-bulto). Es lo que se reporta como "ingresadas" en
+            # la tabla de capacidad; ver nota en madres_info arriba.
+            "n_ingreso_real": info["n_guias_real"] or len(despachos),
+            "kg_ingreso_real": round(info["kg_total"], 1),
+        })
         vuelo_ts_por_madre[id_madre] = ts
     vuelos.sort(key=lambda v: v["ts"])
 
@@ -904,6 +895,25 @@ def main():
         limite_dt = real_ts or now_utc
         vuelos_saltados = sum(1 for ts in vuelos_ts if esperado_ts <= ts < limite_dt)
 
+        # --- Criterio "margen" (2026-09-03) ---
+        # atraso_lista_dias: dias entre que la guia quedo "lista" y el vuelo en
+        # que realmente volo (None si aun no vuela). Puede ser negativo (caso
+        # credito: volo antes de que el pago quedara registrado).
+        atraso_lista_dias = None
+        if real_ts is not None:
+            atraso_lista_dias = round((real_ts - fecha_lista).total_seconds() / 86400, 1)
+        _margen_dias_ok = real_ts is not None and atraso_lista_dias <= MARGEN_MAX_DIAS
+        _margen_vuelos_ok = real_ts is not None and vuelos_saltados <= MARGEN_MAX_VUELOS_SALTADOS
+        no_volo_margen = alcanzo_asignacion and not (_margen_dias_ok and _margen_vuelos_ok)
+
+        # --- Criterio "un vuelo" (2026-09-03, para el Resumen Ejecutivo) ---
+        # El mas permisivo: la guia solo cuenta como afectada si se salto MAS de
+        # un vuelo (no alcanzo ni su vuelo ni el inmediatamente siguiente), o si
+        # todavia no ha volado. Es la lectura "dura": cuantas guias de verdad se
+        # quedaron atras, sin contar a las que perdieron su vuelo pero
+        # engancharon el siguiente.
+        no_volo_1vuelo = alcanzo_asignacion and (real_ts is None or vuelos_saltados > MARGEN_MAX_VUELOS_SALTADOS)
+
         # --- Friccion de consolidacion (2026-09-02, T-0006) ---
         # Etiqueta descriptiva para las guias-bulto: senala si el atraso pudo
         # generarse aguas arriba, en el propio proceso de consolidacion
@@ -955,6 +965,7 @@ def main():
             "cons_fob_cero": g["cons_fob_cero"],
             "cons_n_guias": g["cons_n_guias"],
             "margen_horas": margen_horas,
+            "atraso_lista_dias": atraso_lista_dias,
             "armado_lag_dias": armado_lag_dias,
             "vuelos_saltados": vuelos_saltados,
             "clase_atraso": clase_atraso,
@@ -978,6 +989,8 @@ def main():
             "despacho_cualquiera": g["despacho"].isoformat() if g["despacho"] else None,
             "no_volo_estricto": no_volo_estricto,
             "no_volo_semana": no_volo_semana,
+            "no_volo_margen": no_volo_margen,
+            "no_volo_1vuelo": no_volo_1vuelo,
             "no_volo_neto_consolidacion": no_volo_neto_consolidacion,
         })
 
@@ -1008,8 +1021,12 @@ def main():
     print(f"Guias evaluables (con pago+factura y con vuelo correspondiente ya ocurrido): {len(detalle)}")
     inc_estricto = [d for d in detalle if d["no_volo_estricto"]]
     inc_semana = [d for d in detalle if d["no_volo_semana"]]
+    inc_margen = [d for d in detalle if d["no_volo_margen"]]
+    inc_1vuelo = [d for d in detalle if d["no_volo_1vuelo"]]
     print(f"No volaron en su vuelo EXACTO correspondiente: {len(inc_estricto)} ({len(inc_estricto)/len(detalle)*100:.1f}%)")
     print(f"No volaron dentro de la SEMANA de su vuelo correspondiente: {len(inc_semana)} ({len(inc_semana)/len(detalle)*100:.1f}%)")
+    print(f"No cumplen el MARGEN ({MARGEN_MAX_DIAS}d desde lista Y <= {MARGEN_MAX_VUELOS_SALTADOS} vuelo saltado): {len(inc_margen)} ({len(inc_margen)/len(detalle)*100:.1f}%)")
+    print(f"Se saltaron MAS de {MARGEN_MAX_VUELOS_SALTADOS} vuelo (o no han volado) -- criterio Resumen: {len(inc_1vuelo)} ({len(inc_1vuelo)/len(detalle)*100:.1f}%)")
     _fr = _resumen_friccion_consolidacion(detalle)
     print(
         f"Friccion consolidacion ({ANIO_REPORTE}): consolidadas "
@@ -1139,7 +1156,7 @@ def main():
                 [
                     {
                         k: v for k, v in d.items()
-                        if k not in ("no_volo_estricto", "no_volo_semana", "no_volo_neto_consolidacion")
+                        if k not in ("no_volo_estricto", "no_volo_semana", "no_volo_margen", "no_volo_1vuelo", "no_volo_neto_consolidacion")
                     }
                     for d in incidentes_2026
                 ],
@@ -1197,8 +1214,10 @@ def main():
                 k: d[k] for k in (
                     "n_guia", "casilla", "peso", "consolidada", "cons_id",
                     "cons_n_guias", "cons_friccion", "armado_lag_dias",
+                    "atraso_lista_dias", "vuelos_saltados",
                     "convenio", "vuelo_esperado", "vuelo_real", "awb",
                     "aerolinea", "no_volo_estricto", "no_volo_semana",
+                    "no_volo_margen",
                 )
             }
             for d in detalle
@@ -1212,6 +1231,13 @@ def main():
         # consolidadas viven en su propia pestaña -- ver bloque_definicion().
         "estricto": bloque_definicion("no_volo_estricto"),
         "semana": bloque_definicion("no_volo_semana"),
+        # Criterio "margen" (2026-09-03): afectada salvo que vuele dentro de
+        # MARGEN_MAX_DIAS dias de quedar lista Y se salte <= MARGEN_MAX_VUELOS_SALTADOS
+        # vuelo. Total (individuales + consolidadas), igual que estricto/semana.
+        "margen": bloque_definicion("no_volo_margen"),
+        # Criterio "un vuelo" (2026-09-03): el mas permisivo -- afectada solo si
+        # se salto MAS de un vuelo o no ha volado. Alimenta el Resumen Ejecutivo.
+        "un_vuelo": bloque_definicion("no_volo_1vuelo"),
         "individuales": {
             "estricto": bloque_definicion("no_volo_estricto", poblacion_filtro=False),
             "semana": bloque_definicion("no_volo_semana", poblacion_filtro=False),
