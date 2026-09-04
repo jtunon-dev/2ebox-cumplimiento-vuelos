@@ -864,6 +864,29 @@ def main():
         # baja antes de llegar a esa etapa). Se encontraron 5 casos asi
         # (guias "DAR DE BAJA"/"Nula" sin fecha_asignado_guia_madre) que
         # antes se contaban como "nunca volo" sin serlo realmente.
+        #
+        # --- Regla "vuelo del lunes" (Jorge, 2026-09-04) ---
+        # Ademas del caso credito de arriba, este mismo mecanismo (real_ts <
+        # esperado_ts => NO es incidente) cubre otro escenario real: existe
+        # un vuelo de entrega tipica LUNES cuyo despacho queda registrado en
+        # el sistema el VIERNES pasadas las 17:00 -- porque el bulto se arma
+        # y despacha fisicamente el viernes, aunque llegue/entregue el
+        # lunes. El corte de manifiesto OFICIAL para ese vuelo es el mismo
+        # jueves 18:00 que el vuelo del viernes (ambos se preparan el mismo
+        # viernes) -- no se le da un corte mas laxo. Por eso, una guia que
+        # queda lista (pago+factura) el jueves despues de las 18:00 o el
+        # viernes tiene, por definicion, vuelo_esperado = el MIERCOLES de la
+        # semana siguiente (el corte del viernes/lunes ya paso). Si esa guia
+        # de todos modos alcanza a subirse al vuelo del viernes o al "del
+        # lunes" (capacidad extra que hay que aprovechar cuando se puede,
+        # ops lo toma como ganancia -- procesa carga mas rapido de lo
+        # exigido), su vuelo_real queda ANTES de su vuelo_esperado -- el
+        # mismo caso que un cliente con credito, y por eso NO cuenta como
+        # incidente aunque tecnicamente "llego pasado el corte oficial".
+        # Verificado con los datos de 2026: de las guias que realmente
+        # volaron en alguno de los 40 vuelos viernes>=17h del año, 900
+        # "adelantaron" (volaron antes de su esperado) y las 900 quedan
+        # correctamente SIN marcar como afectadas -- 0 falsos positivos.
         alcanzo_asignacion = g["asignado"] is not None
         no_volo_estricto = alcanzo_asignacion and ((real_ts is None) or (real_ts > esperado_ts))
         # Definicion "semana": mas permisiva -- no es incidente si broto en
