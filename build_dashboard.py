@@ -19,6 +19,13 @@ with open("cumplimiento_vuelos.json", encoding="utf-8") as f:
 
 MESES_ES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
 
+# Tolerancia acordada con Jorge (2026-09-04): se acepta un maximo de 5% de
+# guias que no vuelan en su vuelo correspondiente y pasan al vuelo siguiente
+# -- es decir, el criterio "vuelo exacto" (data["estricto"]) no deberia
+# superar este % de guias evaluables (ni de kilos evaluados). Se usa en el
+# Resumen y en Guias afectadas -- ver build_tolerancia().
+TOLERANCIA_MAX_PCT = 5.0
+
 # Codigos de convenio por ejecutiva (confirmados con Jorge, 2026-09-01 --
 # mismo mapeo que el subproyecto de comisiones, ver docs/SYSTEM_MAP.md T-0004:
 # Kathy = KC2EBOX + CPLAZA2EBOX (su canal de referidos mas grande) + DiamanteK;
@@ -49,6 +56,12 @@ def color_por_pct(pct):
     if pct >= 15:
         return "var(--warn)"
     return "var(--good)"
+
+
+def color_tolerancia(pct):
+    """Rojo/verde contra la tolerancia acordada (TOLERANCIA_MAX_PCT), no la
+    escala de color_por_pct (que usa 15%/40% para la severidad general)."""
+    return "var(--bad)" if pct > TOLERANCIA_MAX_PCT else "var(--good)"
 
 
 def mes_label(key):
@@ -242,6 +255,93 @@ def barra_capacidad_svg(items, label_fn, key_ingreso, key_podria, width=980, hei
     return "".join(svg)
 
 
+def build_tolerancia(dom_id, incluir_tabla=True):
+    """Bloque "Tolerancia acordada" (pedido de Jorge, 2026-09-04): se acepta
+    un máximo de TOLERANCIA_MAX_PCT% de guías que no vuelan en su vuelo
+    exacto correspondiente y pasan al vuelo siguiente -- es decir, esto usa
+    el criterio "vuelo exacto" (data["estricto"], total individuales +
+    consolidadas). Todo lo que supera ese % de guías evaluables (o de kilos
+    evaluados) es "exceso sobre la tolerancia". Se muestra en la pestaña
+    Resumen (con tabla mes a mes) y arriba de Guías afectadas (solo KPIs,
+    dom_id distinto para no repetir ids)."""
+    b = data["estricto"]
+    ev_g = b["total_evaluables"]
+    af_g = b["total_incidentes"]
+    ev_kg = b["total_kilos_evaluables"]
+    af_kg = b["total_kilos"]
+
+    pct_g = round(af_g / ev_g * 100, 1) if ev_g else 0
+    pct_kg = round(af_kg / ev_kg * 100, 1) if ev_kg else 0
+    tope_g = ev_g * TOLERANCIA_MAX_PCT / 100
+    tope_kg = ev_kg * TOLERANCIA_MAX_PCT / 100
+    exceso_g = max(0, round(af_g - tope_g))
+    exceso_kg = max(0, round(af_kg - tope_kg, 1))
+
+    kpis = f"""
+    <div class="kpis">
+      <div class="kpi"><div class="v" style="color:{color_tolerancia(pct_g)}">{fmt_pct(pct_g)}</div><div class="l">% real de guías fuera de su vuelo exacto (tolerancia: {fmt_pct(TOLERANCIA_MAX_PCT)})</div></div>
+      <div class="kpi {'bad' if exceso_g else ''}"><div class="v">{fmt_n(exceso_g)}</div><div class="l">Guías por sobre la tolerancia (de {fmt_n(af_g)} afectadas; tope permitido {fmt_n(round(tope_g))})</div></div>
+      <div class="kpi {'bad' if exceso_kg else ''}"><div class="v">{fmt_kg(exceso_kg)}</div><div class="l">Kilos por sobre la tolerancia (de {fmt_kg(af_kg)} afectados; tope permitido {fmt_kg(tope_kg)})</div></div>
+    </div>
+"""
+
+    tabla = ""
+    if incluir_tabla:
+        filas_tol = []
+        for k, v in sorted(b["por_mes"].items()):
+            pct_mes = v["pct"]
+            pct_kg_mes = v["pct_kilos"]
+            tope_g_mes = v["evaluables"] * TOLERANCIA_MAX_PCT / 100
+            tope_kg_mes = v["kilos_evaluables"] * TOLERANCIA_MAX_PCT / 100
+            exceso_g_mes = max(0, round(v["incidentes"] - tope_g_mes))
+            exceso_kg_mes = max(0, round(v["kilos"] - tope_kg_mes, 1))
+            filas_tol.append(
+                f"<tr><td data-v='{k}'>{mes_label(k)}</td>"
+                f"<td data-v='{v['evaluables']}'>{fmt_n(v['evaluables'])}</td>"
+                f"<td data-v='{tope_g_mes}'>{fmt_n(round(tope_g_mes))}</td>"
+                f"<td data-v='{v['incidentes']}'>{fmt_n(v['incidentes'])}</td>"
+                f"<td data-v='{exceso_g_mes}' style='color:{color_tolerancia(pct_mes)};font-weight:700'>{fmt_n(exceso_g_mes)}</td>"
+                f"<td data-v='{v['kilos_evaluables']}'>{fmt_kg(v['kilos_evaluables'])}</td>"
+                f"<td data-v='{tope_kg_mes}'>{fmt_kg(tope_kg_mes)}</td>"
+                f"<td data-v='{v['kilos']}'>{fmt_kg(v['kilos'])}</td>"
+                f"<td data-v='{exceso_kg_mes}' style='color:{color_tolerancia(pct_kg_mes)};font-weight:700'>{fmt_kg(exceso_kg_mes)}</td></tr>"
+            )
+        meses_ok = sum(1 for v in b["por_mes"].values() if v["pct"] <= TOLERANCIA_MAX_PCT)
+        meses_tot = len(b["por_mes"])
+        tabla = f"""
+    <div class="kpis" style="margin-top:8px">
+      <div class="kpi"><div class="v">{meses_ok} de {meses_tot}</div><div class="l">Meses dentro de la tolerancia ({fmt_pct(TOLERANCIA_MAX_PCT)} o menos)</div></div>
+    </div>
+    <div class="table-wrap">
+      <table id="tabla-{dom_id}" class="sortable"><thead><tr>
+        <th onclick="ordenarTabla('tabla-{dom_id}',0,'str')">Mes</th>
+        <th onclick="ordenarTabla('tabla-{dom_id}',1,'num')">Guías evaluadas</th>
+        <th onclick="ordenarTabla('tabla-{dom_id}',2,'num')">Tope {fmt_pct(TOLERANCIA_MAX_PCT)} (guías)</th>
+        <th onclick="ordenarTabla('tabla-{dom_id}',3,'num')">Afectadas</th>
+        <th onclick="ordenarTabla('tabla-{dom_id}',4,'num')">Exceso (guías)</th>
+        <th onclick="ordenarTabla('tabla-{dom_id}',5,'num')">Kilos evaluados</th>
+        <th onclick="ordenarTabla('tabla-{dom_id}',6,'num')">Tope {fmt_pct(TOLERANCIA_MAX_PCT)} (kg)</th>
+        <th onclick="ordenarTabla('tabla-{dom_id}',7,'num')">Kilos afectados</th>
+        <th onclick="ordenarTabla('tabla-{dom_id}',8,'num')">Exceso (kg)</th>
+      </tr></thead><tbody>{"".join(filas_tol)}</tbody></table>
+    </div>
+"""
+
+    return f"""
+  <section id="sec-{dom_id}">
+    <h2>Tolerancia acordada — máximo {fmt_pct(TOLERANCIA_MAX_PCT)} de guías al vuelo siguiente</h2>
+    <p class="sub" style="margin-bottom:14px">
+      Se acepta como máximo que el <b>{fmt_pct(TOLERANCIA_MAX_PCT)}</b> de las guías evaluables
+      no vuele en su vuelo exacto correspondiente y pase al vuelo siguiente (criterio "vuelo
+      exacto", individuales + consolidadas). Todo lo que supera ese tope es <b>exceso sobre la
+      tolerancia</b> — en guías y en kilos.
+    </p>
+    {kpis}
+    {tabla}
+  </section>
+"""
+
+
 def build_resumen_ejecutivo():
     """Pestaña "Resumen" (pedido de Jorge, 2026-09-03): la primera hoja, para
     leer lo esencial de una sola pasada. Muestra los totales (guías / kilos /
@@ -304,6 +404,8 @@ def build_resumen_ejecutivo():
       <div class="kpi bad"><div class="v">{fmt_n(af_cl)} · {fmt_pct(pct_cl)}</div><div class="l">Clientes afectados de {fmt_n(ev_cl)}</div></div>
     </div>
   </section>
+
+  {build_tolerancia("resumen-tol", incluir_tabla=True)}
 
   <section>
     <h2>Semana a semana / mes a mes</h2>
@@ -1782,7 +1884,7 @@ seccion_guias_afectadas = build_wrapper_subtabs(
     "guiasaf",
     seccion_ga_estricto,
     seccion_ga_semana,
-    explica_panel([
+    build_tolerancia("guiasaf-tol", incluir_tabla=False) + explica_panel([
         (
             "🎯", "Vuelo exacto",
             "No cuenta como afectada si subió exactamente al vuelo puntual que le "
