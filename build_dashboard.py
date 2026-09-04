@@ -11,6 +11,7 @@ retraso de asignacion a guia madre como causa real, y consolidacion probada
 y descartada como explicacion del patron (aunque tiene tasa base mas alta)."""
 import html
 import json
+import math
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 
@@ -312,7 +313,13 @@ def barra_tolerancia_svg(items, label_fn, grad_prefix, width=980, height=260, ba
     (pedido de Jorge, 2026-09-04): cada barra usa color_tolerancia() (verde /
     amarillo / rojo / rojo oscuro) con un degradado vertical (más claro abajo,
     color pleno arriba -- "que sean degradados según el avance del estado").
-    Líneas punteadas de referencia en el tope (5%) y el doble (10%).
+    Líneas punteadas de referencia en el tope (5%) y el doble (10%). Eje Y
+    LOGARÍTMICO (log1p, pedido de Jorge 2026-09-04: "que se vea mejor los
+    límites del 5% y 10%") -- en escala lineal, cuando hay una semana/vuelo
+    con 50-90% de afectadas (pasa en mayo), el 5%/10% quedan aplastados
+    contra el piso; en log1p el tramo 0-10% siempre ocupa una porción grande
+    y legible del alto del gráfico, sin importar cuán alto llegue el peor
+    período.
     `grad_prefix` tiene que ser único por gráfico embebido en la página (los
     <linearGradient id="..."> son globales al documento SVG completo)."""
     n = len(items)
@@ -328,14 +335,35 @@ def barra_tolerancia_svg(items, label_fn, grad_prefix, width=980, height=260, ba
     max_pct = max((v["pct"] for _, v in items), default=0)
     y_max = max(doble * 1.2, max_pct * 1.15, 10.0)
 
+    # Eje Y logarítmico -- log1p(x) = ln(1+x), se banca el 0% sin romperse
+    # (log(0) no existe) y sigue creciendo con valores altos (pedido de
+    # Jorge, 2026-09-04: "que se vean mejor los límites del 5% y 10%" --
+    # en lineal, cuando hay una semana/vuelo con 50-90% de afectadas, el 5%
+    # y el 10% quedan aplastados contra el piso del gráfico; en log1p el
+    # tramo 0-10% ocupa casi la mitad del alto del gráfico siempre, sin
+    # importar cuán alto llegue el peor período).
     def escala(val):
-        return (min(val, y_max) / y_max) * plot_h if y_max else 0
+        val = max(0.0, min(val, y_max))
+        denom = math.log1p(y_max)
+        return (math.log1p(val) / denom) * plot_h if denom else 0
+
+    def _grid_vals():
+        # Grilla en valores redondos, no en pasos lineales -- siempre
+        # incluye 0%, el tope (5%) y el doble (10%), más marcas que se van
+        # duplicando (20/40/80...) hasta llegar cerca del máximo real.
+        vals = {0.0, tope, doble}
+        v = doble * 2
+        while v < y_max * 0.98:
+            vals.add(round(v, 1))
+            v *= 2
+        vals.add(round(y_max, 1))
+        return sorted(x for x in vals if x <= y_max + 0.05)
 
     TIERS = (("good", "var(--good)"), ("warn", "var(--warn)"), ("bad", "var(--bad)"), ("baddark", "var(--bad-dark)"))
     grad_id = {"var(--good)": f"{grad_prefix}-good", "var(--warn)": f"{grad_prefix}-warn",
                "var(--bad)": f"{grad_prefix}-bad", "var(--bad-dark)": f"{grad_prefix}-baddark"}
 
-    svg = [f'<svg viewBox="0 0 {width} {height}" class="chart-svg" role="img" aria-label="Porcentaje sobre la tolerancia acordada del 5%">', "<defs>"]
+    svg = [f'<svg viewBox="0 0 {width} {height}" class="chart-svg" role="img" aria-label="Porcentaje sobre la tolerancia acordada del 5%, escala logarítmica">', "<defs>"]
     for tier_id, color_var in TIERS:
         svg.append(
             f'<linearGradient id="{grad_prefix}-{tier_id}" x1="0" y1="1" x2="0" y2="0">'
@@ -345,9 +373,7 @@ def barra_tolerancia_svg(items, label_fn, grad_prefix, width=980, height=260, ba
         )
     svg.append("</defs>")
 
-    pasos = 4
-    for i in range(pasos + 1):
-        val = round(y_max / pasos * i, 1)
+    for val in _grid_vals():
         y = top_pad + plot_h - escala(val)
         svg.append(f'<line x1="{left_pad}" y1="{y:.1f}" x2="{width - right_pad}" y2="{y:.1f}" class="grid-line" />')
         svg.append(f'<text x="{left_pad - 6}" y="{y + 3:.1f}" class="axis-label" text-anchor="end">{fmt_n(val)}%</text>')
@@ -508,7 +534,8 @@ def build_tolerancia(dom_id, incluir_tabla=True):
     <h3 style="font-family:'Russo One',sans-serif;font-weight:400;font-size:12.5px;margin:22px 0 4px">¿En qué períodos nos pasamos del {fmt_pct(TOLERANCIA_MAX_PCT)}?</h3>
     <p class="sub" style="margin-bottom:8px">
       Cada barra se colorea según en qué tramo cayó ese período. "Por vuelo" agrupa por el vuelo
-      que le correspondía a cada guía (no en el que terminó volando).
+      que le correspondía a cada guía (no en el que terminó volando). <b>Eje logarítmico</b>: así
+      el 5% y el 10% se ven siempre con claridad, aunque algún período llegue muy alto (ej. mayo).
     </p>
     <div class="tol-gauge-legend" style="margin:0 0 12px">
       <span class="tg-leg"><i class="solid" style="background:var(--good)"></i>Holgado</span>
@@ -1484,6 +1511,7 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     filas = []
     for r in universo:
         mo = r["vuelo_esperado"][:7]
+        dia = int(r["vuelo_esperado"][8:10])
         conv = r["convenio"] or ""
         afectada = bool(r["no_volo_" + scope])
         if afectada:
@@ -1528,6 +1556,7 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         filas.append({
             "n": r["n_guia"] if afectada else None,
             "mo": mo,
+            "d": dia,
             "eje": clasificar_ejecutiva(conv),
             "conv": conv,
             "cas": r["casilla"] or "",
@@ -1627,6 +1656,15 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
 
     datos_json = json.dumps(filas, ensure_ascii=False).replace("</", "<\\/")
 
+    # Meses de TODO el universo (afectadas y no) -- el heatmap de cumplimiento
+    # por día usa esto para las etiquetas de fila; puede incluir meses sin
+    # ninguna afectada (0%), que "meses_presentes" (arriba) no trae porque
+    # ese solo mira afectadas_todas.
+    meses_universo = sorted(set(r["mo"] for r in filas))
+    ga_meses_todos_label_json = json.dumps(
+        {mo: mes_label(mo) for mo in meses_universo}, ensure_ascii=False
+    )
+
     # --- Detalle mensual/semanal del TOTAL de guías afectadas (pedido de
     # Jorge, 2026-09-03): la misma tabla que muestra Individuales en su
     # sección "Detalle", pero sobre data[scope] = individuales + consolidadas
@@ -1692,6 +1730,21 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         <div class="kpi"><div class="v" id="ga-kpi-kg-{sfx}">—</div><div class="l">Kilos afectados / evaluados</div></div>
         <div class="kpi"><div class="v" id="ga-kpi-clientes-{sfx}">—</div><div class="l">Clientes afectados / evaluados</div></div>
       </div>
+
+      <h3 style="font-family:'Russo One',sans-serif;font-weight:400;font-size:12.5px;margin:0 0 4px">
+        Cumplimiento por día del mes ({titulo_bloque})
+      </h3>
+      <p class="sub" style="margin-bottom:8px">
+        Por cada día en que una guía quedó lista para volar, cuántas de esas guías terminaron
+        subiéndose a tiempo bajo este criterio (no cuentan como afectadas) — sobre el total de
+        guías que quedaron listas ese mismo día. Se recalcula con los filtros de la izquierda.
+      </p>
+      <div class="heatmap-legend">
+        <span>0% cumplimiento</span>
+        <span class="heatmap-legend-bar"></span>
+        <span>100% cumplimiento</span>
+      </div>
+      <div id="ga-heatmap-{sfx}"></div>
 
       <div class="table-wrap" style="max-height:520px">
         <table id="tabla-guias-afectadas-{sfx}" class="sortable">
@@ -1765,6 +1818,7 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     // afectadas; el universo filtrado da el denominador real ("36 de 300").
     var GA_DATOS = {datos_json};
     var GA_MESES_LABEL = {json.dumps({mo: mes_label(mo) for mo in meses_presentes}, ensure_ascii=False)};
+    var GA_MESES_TODOS_LABEL = {ga_meses_todos_label_json};
     var gaSort = {{ col: 0, asc: true }};
 
     function gaFmtN(n) {{ return n.toLocaleString('es-CL'); }}
@@ -1808,7 +1862,11 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
       // afectadas bajo este criterio Y pasan el filtro de Motivo -- es lo
       // que se ve en la tabla y el NUMERADOR de los KPIs.
       var afectadas = universo.filter(function (r) {{ return r.af && motSet[r.mot]; }});
-      return {{ universo: universo, afectadas: afectadas }};
+      // "cumplidas": el resto del universo (todo lo que NO quedó contado como
+      // "afectadas" arriba, mismo criterio incluyendo el filtro de Motivo) --
+      // es el numerador del heatmap de cumplimiento por día (ver gaRenderHeatmap).
+      var cumplidas = universo.filter(function (r) {{ return !(r.af && motSet[r.mot]); }});
+      return {{ universo: universo, afectadas: afectadas, cumplidas: cumplidas }};
     }}
 
     window.gaOrdenar_{sfx} = function (col) {{
@@ -1829,9 +1887,61 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
       return '<span style="color:var(--ink-faint)">—</span>';
     }}
 
+    // Interpola bad -> warn -> good (mismos hex que --bad/--warn/--good en
+    // :root) según el % de cumplimiento de la celda. Hardcodeado en vez de
+    // leer las variables CSS porque son colores de marca fijos, no cambian
+    // con el tema claro/oscuro.
+    function gaHeatColor(pct) {{
+      var bad = [227, 32, 62], warn = [232, 162, 61], good = [52, 199, 122];
+      var c0, c1, t;
+      if (pct <= 50) {{ c0 = bad; c1 = warn; t = pct / 50; }}
+      else {{ c0 = warn; c1 = good; t = (pct - 50) / 50; }}
+      var r = Math.round(c0[0] + (c1[0] - c0[0]) * t);
+      var g = Math.round(c0[1] + (c1[1] - c0[1]) * t);
+      var b = Math.round(c0[2] + (c1[2] - c0[2]) * t);
+      return 'rgba(' + r + ',' + g + ',' + b + ',0.88)';
+    }}
+
+    function gaRenderHeatmap(universo, cumplidas) {{
+      var tot = {{}}, ok = {{}};
+      universo.forEach(function (r) {{
+        var k = r.mo + '-' + r.d;
+        tot[k] = (tot[k] || 0) + 1;
+      }});
+      cumplidas.forEach(function (r) {{
+        var k = r.mo + '-' + r.d;
+        ok[k] = (ok[k] || 0) + 1;
+      }});
+      var meses = Array.from(new Set(universo.map(function (r) {{ return r.mo; }}))).sort();
+      var html = '<div class="heatmap-scroll"><table class="heatmap-tabla"><thead><tr><th></th>';
+      for (var d = 1; d <= 31; d++) html += '<th>' + d + '</th>';
+      html += '</tr></thead><tbody>';
+      meses.forEach(function (mo) {{
+        html += '<tr><th class="heatmap-mes">' + (GA_MESES_TODOS_LABEL[mo] || mo) + '</th>';
+        for (var d = 1; d <= 31; d++) {{
+          var k = mo + '-' + d;
+          var t = tot[k] || 0;
+          if (!t) {{
+            html += '<td class="heatmap-cell vacia"></td>';
+            continue;
+          }}
+          var o = ok[k] || 0;
+          var pct = (o / t) * 100;
+          html += '<td class="heatmap-cell" style="background:' + gaHeatColor(pct) + '" title="' +
+            (GA_MESES_TODOS_LABEL[mo] || mo) + ', día ' + d + ': ' + o + ' de ' + t +
+            ' guías subieron a tiempo (' + pct.toFixed(0) + '%)">' + o + '</td>';
+        }}
+        html += '</tr>';
+      }});
+      html += '</tbody></table></div>';
+      var el = document.getElementById('ga-heatmap-{sfx}');
+      el.innerHTML = meses.length ? html : '<p class="empty-note">Sin guías para este filtro.</p>';
+    }}
+
     function gaRender() {{
       var res = gaFiltrar();
       var universo = res.universo, afectadas = res.afectadas;
+      gaRenderHeatmap(universo, res.cumplidas);
       var col = GA_COLS[gaSort.col];
       afectadas.sort(function (a, b) {{
         var va = a[col], vb = b[col];
@@ -2297,6 +2407,22 @@ HTML = f"""<!DOCTYPE html>
     .ed-box {{ width: 100%; }}
     .ed-arrow {{ transform: rotate(90deg); }}
   }}
+  /* Heatmap "Cumplimiento por día del mes" dentro de Guías afectadas (pedido
+     de Jorge, 2026-09-04): filas = mes, columnas = día del mes (1-31), color
+     de cada celda = % de guías que quedaron listas ese día y subieron a
+     tiempo bajo el criterio activo. Se recalcula en JS junto con el resto de
+     la pestaña -- ver gaRenderHeatmap(). */
+  .heatmap-legend {{ display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--ink-faint); margin-bottom: 10px; }}
+  .heatmap-legend-bar {{
+    display: inline-block; width: 140px; height: 8px; border-radius: 4px;
+    background: linear-gradient(to right, #E3203E, #E8A23D, #34C77A);
+  }}
+  .heatmap-scroll {{ overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; margin-bottom: 24px; }}
+  .heatmap-tabla {{ border-collapse: collapse; font-size: 10.5px; white-space: nowrap; }}
+  .heatmap-tabla th {{ font-weight: 600; color: var(--ink-faint); padding: 4px 5px; text-align: center; position: sticky; top: 0; background: var(--surface); }}
+  .heatmap-tabla th.heatmap-mes {{ text-align: right; position: sticky; left: 0; z-index: 1; padding-right: 10px; }}
+  .heatmap-cell {{ width: 26px; height: 24px; text-align: center; color: #0D1721; font-weight: 700; border: 1px solid var(--bg); }}
+  .heatmap-cell.vacia {{ background: var(--surface-2); border-color: var(--line); }}
   .kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 26px; }}
   .kpi {{ background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }}
   .kpi .v {{ font-family: 'Russo One', system-ui, sans-serif; font-size: 22px; }}
