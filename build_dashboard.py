@@ -2118,7 +2118,7 @@ HTML = f"""<!DOCTYPE html>
   <div class="header-row">
     <h1>Cumplimiento de Vuelos — Guías 2ebox {data['anio_reporte']}</h1>
     <div class="header-actions">
-      <span class="update-badge" id="update-badge">Actualizado: cargando…</span>
+      <span class="update-badge" id="update-badge">cargando…</span>
       <button class="theme-toggle" id="theme-toggle-btn" onclick="alternarTema()">🌙 Modo oscuro</button>
     </div>
   </div>
@@ -2247,30 +2247,32 @@ HTML = f"""<!DOCTYPE html>
   }}
   actualizarBotonTema();
 
-  // Badge "Actualizado: ..." -- pedido de Jorge (2026-09-03): saber de un
-  // vistazo si el reporte es de hoy. Se calcula en el NAVEGADOR (no al
-  // generar el HTML) para que siga siendo correcto aunque se mire horas o
-  // dias despues de la ultima corrida del pipeline automatico. GENERADO_ISO
-  // viene con tz UTC explicito (ver docstring del extractor) -- new Date()
-  // lo convierte solo a la hora local de quien mira el reporte.
+  // Badge de fecha/hora de actualizacion -- pedido de Jorge (2026-09-03): que
+  // muestre la fecha con hora directamente, sin la palabra "Actualizado". Se
+  // calcula en el NAVEGADOR (no al generar el HTML) para que siga siendo
+  // correcto aunque se mire horas o dias despues de la ultima corrida del
+  // pipeline automatico. GENERADO_ISO viene con tz UTC explicito (ver
+  // docstring del extractor) -- new Date() lo convierte solo a la hora local
+  // de quien mira el reporte.
   (function () {{
     var el = document.getElementById('update-badge');
     if (!el) return;
     var GENERADO_ISO = {json.dumps(data['generado'])};
     var d = new Date(GENERADO_ISO);
-    if (isNaN(d.getTime())) {{ el.textContent = 'Actualizado: s/d'; return; }}
+    if (isNaN(d.getTime())) {{ el.textContent = 's/d'; return; }}
     var ahora = new Date();
     var pad = function (n) {{ return String(n).padStart(2, '0'); }};
-    var fecha = pad(d.getDate()) + '-' + pad(d.getMonth() + 1) + '-' + d.getFullYear();
+    var MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+    var fechaCorta = pad(d.getDate()) + '-' + MESES_CORTOS[d.getMonth()];
     var hora = pad(d.getHours()) + ':' + pad(d.getMinutes());
     var esHoy = d.getFullYear() === ahora.getFullYear() && d.getMonth() === ahora.getMonth() && d.getDate() === ahora.getDate();
     if (esHoy) {{
       el.className = 'update-badge ok';
-      el.textContent = '🟢 Actualizado hoy ' + hora;
+      el.textContent = '🟢 ' + fechaCorta + ' ' + hora;
     }} else {{
       var dias = Math.max(1, Math.round((ahora - d) / 86400000));
       el.className = 'update-badge stale';
-      el.textContent = '🔴 Desactualizado — ' + fecha + ' ' + hora + ' (hace ' + dias + (dias === 1 ? ' día' : ' días') + ')';
+      el.textContent = '🔴 ' + fechaCorta + ' ' + hora + ' (hace ' + dias + (dias === 1 ? ' día' : ' días') + ')';
     }}
   }})();
 
