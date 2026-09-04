@@ -1511,7 +1511,11 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     filas = []
     for r in universo:
         mo = r["vuelo_esperado"][:7]
-        dia = int(r["vuelo_esperado"][8:10])
+        # Día de la SEMANA (0=lunes .. 6=domingo) en que la guía quedó lista
+        # -- pedido de Jorge (2026-09-04): el heatmap de cumplimiento tiene
+        # más sentido por día de semana que por día del mes (los vuelos son
+        # siempre miércoles/viernes, así que el ciclo relevante es semanal).
+        dow = date.fromisoformat(r["vuelo_esperado"][:10]).weekday()
         conv = r["convenio"] or ""
         afectada = bool(r["no_volo_" + scope])
         if afectada:
@@ -1556,7 +1560,7 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         filas.append({
             "n": r["n_guia"] if afectada else None,
             "mo": mo,
-            "d": dia,
+            "dow": dow,
             "eje": clasificar_ejecutiva(conv),
             "conv": conv,
             "cas": r["casilla"] or "",
@@ -1579,13 +1583,21 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
             "af": afectada,
         })
 
-    # Las opciones de cada filtro (qué meses/ejecutivas/convenios/etc.
-    # aparecen como checkbox, y el numerito al lado) se siguen sacando SOLO
-    # de las afectadas -- igual que antes de agregar el universo completo.
-    # Esta pestaña es para acotar guías AFECTADAS; un convenio con 300
-    # guías evaluables pero 0 afectadas no aporta como filtro acá.
+    # Las opciones de cada filtro (qué ejecutivas/convenios/etc. aparecen
+    # como checkbox, y el numerito al lado) se siguen sacando SOLO de las
+    # afectadas -- esta pestaña es para acotar guías AFECTADAS; un convenio
+    # con 300 guías evaluables pero 0 afectadas no aporta como filtro acá.
+    # EXCEPCIÓN: "Fechas" (meses) sale del universo COMPLETO, no solo de las
+    # afectadas -- bug encontrado 2026-09-04 (Jorge: "en el filtro de misma
+    # semana te saltaste el mes de marzo"): bajo el criterio "misma semana",
+    # marzo 2026 tiene CERO afectadas, así que no generaba checkbox de mes;
+    # sin checkbox, `mesesSet['2026-03']` queda undefined en gaFiltrar() y
+    # marzo desaparece de TODO lo que dependa de `universo` en esa pestaña
+    # -- no solo de la tabla de afectadas, también del heatmap de
+    # cumplimiento (que sí necesita los meses sin ningún incidente, para
+    # poder mostrarlos en 100% verde).
     afectadas_todas = [r for r in filas if r["af"]]
-    meses_presentes = sorted(set(r["mo"] for r in afectadas_todas))
+    meses_presentes = sorted(set(r["mo"] for r in filas))
     convenio_counts = Counter(r["conv"] for r in afectadas_todas)
     convenios_ordenados = sorted(convenio_counts.items(), key=lambda kv: -kv[1])
     ejecutiva_counts = Counter(r["eje"] for r in afectadas_todas)
@@ -1656,15 +1668,6 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
 
     datos_json = json.dumps(filas, ensure_ascii=False).replace("</", "<\\/")
 
-    # Meses de TODO el universo (afectadas y no) -- el heatmap de cumplimiento
-    # por día usa esto para las etiquetas de fila; puede incluir meses sin
-    # ninguna afectada (0%), que "meses_presentes" (arriba) no trae porque
-    # ese solo mira afectadas_todas.
-    meses_universo = sorted(set(r["mo"] for r in filas))
-    ga_meses_todos_label_json = json.dumps(
-        {mo: mes_label(mo) for mo in meses_universo}, ensure_ascii=False
-    )
-
     # --- Detalle mensual/semanal del TOTAL de guías afectadas (pedido de
     # Jorge, 2026-09-03): la misma tabla que muestra Individuales en su
     # sección "Detalle", pero sobre data[scope] = individuales + consolidadas
@@ -1732,12 +1735,13 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
       </div>
 
       <h3 style="font-family:'Russo One',sans-serif;font-weight:400;font-size:12.5px;margin:0 0 4px">
-        Cumplimiento por día del mes ({titulo_bloque})
+        Cumplimiento por día de la semana ({titulo_bloque})
       </h3>
       <p class="sub" style="margin-bottom:8px">
-        Por cada día en que una guía quedó lista para volar, cuántas de esas guías terminaron
-        subiéndose a tiempo bajo este criterio (no cuentan como afectadas) — sobre el total de
-        guías que quedaron listas ese mismo día. Se recalcula con los filtros de la izquierda.
+        Por cada día de la semana en que una guía quedó lista para volar (lunes a domingo), cuántas
+        de esas guías terminaron subiéndose a tiempo bajo este criterio (no cuentan como afectadas)
+        — sobre el total de guías que quedaron listas ese mismo día de semana, mes a mes. Se
+        recalcula con los filtros de la izquierda.
       </p>
       <div class="heatmap-legend">
         <span>0% cumplimiento</span>
@@ -1818,7 +1822,6 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     // afectadas; el universo filtrado da el denominador real ("36 de 300").
     var GA_DATOS = {datos_json};
     var GA_MESES_LABEL = {json.dumps({mo: mes_label(mo) for mo in meses_presentes}, ensure_ascii=False)};
-    var GA_MESES_TODOS_LABEL = {ga_meses_todos_label_json};
     var gaSort = {{ col: 0, asc: true }};
 
     function gaFmtN(n) {{ return n.toLocaleString('es-CL'); }}
@@ -1902,24 +1905,29 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
       return 'rgba(' + r + ',' + g + ',' + b + ',0.88)';
     }}
 
+    // Días de semana en el mismo orden que Python date.weekday() (0=lunes,
+    // ..., 6=domingo) -- pedido de Jorge (2026-09-04): el heatmap es por día
+    // de SEMANA, no por día del mes (los vuelos son siempre miércoles/
+    // viernes, el ciclo relevante es semanal, no el número de día 1-31).
+    var GA_DOW_LABEL = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
     function gaRenderHeatmap(universo, cumplidas) {{
       var tot = {{}}, ok = {{}};
       universo.forEach(function (r) {{
-        var k = r.mo + '-' + r.d;
+        var k = r.mo + '-' + r.dow;
         tot[k] = (tot[k] || 0) + 1;
       }});
       cumplidas.forEach(function (r) {{
-        var k = r.mo + '-' + r.d;
+        var k = r.mo + '-' + r.dow;
         ok[k] = (ok[k] || 0) + 1;
       }});
       var meses = Array.from(new Set(universo.map(function (r) {{ return r.mo; }}))).sort();
       var html = '<div class="heatmap-scroll"><table class="heatmap-tabla"><thead><tr><th></th>';
-      for (var d = 1; d <= 31; d++) html += '<th>' + d + '</th>';
+      for (var dow = 0; dow <= 6; dow++) html += '<th>' + GA_DOW_LABEL[dow] + '</th>';
       html += '</tr></thead><tbody>';
       meses.forEach(function (mo) {{
-        html += '<tr><th class="heatmap-mes">' + (GA_MESES_TODOS_LABEL[mo] || mo) + '</th>';
-        for (var d = 1; d <= 31; d++) {{
-          var k = mo + '-' + d;
+        html += '<tr><th class="heatmap-mes">' + (GA_MESES_LABEL[mo] || mo) + '</th>';
+        for (var dow = 0; dow <= 6; dow++) {{
+          var k = mo + '-' + dow;
           var t = tot[k] || 0;
           if (!t) {{
             html += '<td class="heatmap-cell vacia"></td>';
@@ -1928,7 +1936,7 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
           var o = ok[k] || 0;
           var pct = (o / t) * 100;
           html += '<td class="heatmap-cell" style="background:' + gaHeatColor(pct) + '" title="' +
-            (GA_MESES_TODOS_LABEL[mo] || mo) + ', día ' + d + ': ' + o + ' de ' + t +
+            (GA_MESES_LABEL[mo] || mo) + ', ' + GA_DOW_LABEL[dow] + ': ' + o + ' de ' + t +
             ' guías subieron a tiempo (' + pct.toFixed(0) + '%)">' + o + '</td>';
         }}
         html += '</tr>';
@@ -2407,21 +2415,22 @@ HTML = f"""<!DOCTYPE html>
     .ed-box {{ width: 100%; }}
     .ed-arrow {{ transform: rotate(90deg); }}
   }}
-  /* Heatmap "Cumplimiento por día del mes" dentro de Guías afectadas (pedido
-     de Jorge, 2026-09-04): filas = mes, columnas = día del mes (1-31), color
-     de cada celda = % de guías que quedaron listas ese día y subieron a
-     tiempo bajo el criterio activo. Se recalcula en JS junto con el resto de
-     la pestaña -- ver gaRenderHeatmap(). */
+  /* Heatmap "Cumplimiento por día de la semana" dentro de Guías afectadas
+     (pedido de Jorge, 2026-09-03, ajustado a día de SEMANA 2026-09-04):
+     filas = mes, columnas = día de semana (lunes a domingo), color de cada
+     celda = % de guías que quedaron listas ese día y subieron a tiempo bajo
+     el criterio activo. Se recalcula en JS junto con el resto de la
+     pestaña -- ver gaRenderHeatmap(). */
   .heatmap-legend {{ display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--ink-faint); margin-bottom: 10px; }}
   .heatmap-legend-bar {{
     display: inline-block; width: 140px; height: 8px; border-radius: 4px;
     background: linear-gradient(to right, #E3203E, #E8A23D, #34C77A);
   }}
   .heatmap-scroll {{ overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; margin-bottom: 24px; }}
-  .heatmap-tabla {{ border-collapse: collapse; font-size: 10.5px; white-space: nowrap; }}
+  .heatmap-tabla {{ border-collapse: collapse; font-size: 11px; white-space: nowrap; }}
   .heatmap-tabla th {{ font-weight: 600; color: var(--ink-faint); padding: 4px 5px; text-align: center; position: sticky; top: 0; background: var(--surface); }}
   .heatmap-tabla th.heatmap-mes {{ text-align: right; position: sticky; left: 0; z-index: 1; padding-right: 10px; }}
-  .heatmap-cell {{ width: 26px; height: 24px; text-align: center; color: #0D1721; font-weight: 700; border: 1px solid var(--bg); }}
+  .heatmap-cell {{ width: 56px; height: 30px; text-align: center; color: #0D1721; font-weight: 700; border: 1px solid var(--bg); }}
   .heatmap-cell.vacia {{ background: var(--surface-2); border-color: var(--line); }}
   .kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 26px; }}
   .kpi {{ background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }}
