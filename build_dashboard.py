@@ -59,9 +59,61 @@ def color_por_pct(pct):
 
 
 def color_tolerancia(pct):
-    """Rojo/verde contra la tolerancia acordada (TOLERANCIA_MAX_PCT), no la
-    escala de color_por_pct (que usa 15%/40% para la severidad general)."""
-    return "var(--bad)" if pct > TOLERANCIA_MAX_PCT else "var(--good)"
+    """Escala de color de la TOLERANCIA ACORDADA (pedido de Jorge,
+    2026-09-04) -- NO es la escala general de color_por_pct (15%/40%, para
+    severidad genérica). Cuatro tramos relativos a TOLERANCIA_MAX_PCT (5%):
+    verde = holgado, amarillo = cerca del 5% (desde 60% del tope, o sea 3%),
+    rojo = ya pasó el 5%, rojo oscuro = pasó el DOBLE (10%) -- grave."""
+    if pct > TOLERANCIA_MAX_PCT * 2:
+        return "var(--bad-dark)"
+    if pct > TOLERANCIA_MAX_PCT:
+        return "var(--bad)"
+    if pct >= TOLERANCIA_MAX_PCT * 0.6:
+        return "var(--warn)"
+    return "var(--good)"
+
+
+def gauge_tolerancia_html(pct, extra_label=""):
+    """Barra de progreso / gauge horizontal (pedido de Jorge, 2026-09-04):
+    track con degradado FIJO verde -> amarillo -> rojo -> rojo oscuro (la
+    escala de riesgo en sí, con los mismos tramos que color_tolerancia()),
+    más un marcador que cae en la posición del % real. El eje se escala
+    dinámicamente (mínimo 15%, o el real +30% de margen si es mayor) para
+    que el marcador y los topes de 5%/10% siempre queden legibles."""
+    tope = TOLERANCIA_MAX_PCT
+    doble = TOLERANCIA_MAX_PCT * 2
+    cerca = TOLERANCIA_MAX_PCT * 0.6
+    scale_max = max(15.0, doble * 1.15, pct * 1.3)
+
+    def pos(v):
+        return round(min(v, scale_max) / scale_max * 100, 2)
+
+    gradiente = (
+        f"linear-gradient(to right, var(--good) 0%, var(--warn) {pos(cerca)}%, "
+        f"var(--bad) {pos(tope)}%, var(--bad-dark) {pos(doble)}%, var(--bad-dark) 100%)"
+    )
+    marcador_pct = pos(pct)
+    label = f"{fmt_pct(pct)}" + (f" {extra_label}" if extra_label else "")
+
+    # Los ticks de 5%/10% NO llevan texto propio (cuando el marcador cae
+    # cerca de uno de los dos -- caso frecuente, ya que 5-10% es justo la
+    # zona de alerta -- el texto flotante del tick se pisaba con la
+    # burbuja del marcador). La referencia va en una leyenda fija abajo,
+    # que nunca se mueve ni se superpone.
+    return f"""
+  <div class="tol-gauge">
+    <div class="tol-gauge-track" style="background-image:{gradiente}">
+      <div class="tol-gauge-tick" style="left:{pos(tope)}%"></div>
+      <div class="tol-gauge-tick doble" style="left:{pos(doble)}%"></div>
+      <div class="tol-gauge-marker" style="left:{marcador_pct}%"><span class="tg-marker-label">{label}</span></div>
+    </div>
+    <div class="tol-gauge-scale"><span>0%</span><span>{fmt_pct(scale_max)}</span></div>
+    <div class="tol-gauge-legend">
+      <span class="tg-leg"><i style="border-color:var(--bad)"></i>Tolerancia {fmt_pct(tope)}</span>
+      <span class="tg-leg"><i style="border-color:var(--bad-dark)"></i>Doble ({fmt_pct(doble)}) — grave</span>
+    </div>
+  </div>
+"""
 
 
 def mes_label(key):
@@ -255,6 +307,120 @@ def barra_capacidad_svg(items, label_fn, key_ingreso, key_podria, width=980, hei
     return "".join(svg)
 
 
+def barra_tolerancia_svg(items, label_fn, grad_prefix, width=980, height=260, bar_gap=6):
+    """Gráfico de barras coloreadas por tramo de la tolerancia acordada
+    (pedido de Jorge, 2026-09-04): cada barra usa color_tolerancia() (verde /
+    amarillo / rojo / rojo oscuro) con un degradado vertical (más claro abajo,
+    color pleno arriba -- "que sean degradados según el avance del estado").
+    Líneas punteadas de referencia en el tope (5%) y el doble (10%).
+    `grad_prefix` tiene que ser único por gráfico embebido en la página (los
+    <linearGradient id="..."> son globales al documento SVG completo)."""
+    n = len(items)
+    if n == 0:
+        return "<p class='empty-note'>Sin datos.</p>"
+    left_pad, right_pad, top_pad, bottom_pad = 40, 10, 18, 46
+    plot_w = width - left_pad - right_pad
+    plot_h = height - top_pad - bottom_pad
+    bar_w = max((plot_w - bar_gap * (n - 1)) / n, 2)
+
+    tope = TOLERANCIA_MAX_PCT
+    doble = TOLERANCIA_MAX_PCT * 2
+    max_pct = max((v["pct"] for _, v in items), default=0)
+    y_max = max(doble * 1.2, max_pct * 1.15, 10.0)
+
+    def escala(val):
+        return (min(val, y_max) / y_max) * plot_h if y_max else 0
+
+    TIERS = (("good", "var(--good)"), ("warn", "var(--warn)"), ("bad", "var(--bad)"), ("baddark", "var(--bad-dark)"))
+    grad_id = {"var(--good)": f"{grad_prefix}-good", "var(--warn)": f"{grad_prefix}-warn",
+               "var(--bad)": f"{grad_prefix}-bad", "var(--bad-dark)": f"{grad_prefix}-baddark"}
+
+    svg = [f'<svg viewBox="0 0 {width} {height}" class="chart-svg" role="img" aria-label="Porcentaje sobre la tolerancia acordada del 5%">', "<defs>"]
+    for tier_id, color_var in TIERS:
+        svg.append(
+            f'<linearGradient id="{grad_prefix}-{tier_id}" x1="0" y1="1" x2="0" y2="0">'
+            f'<stop offset="0%" style="stop-color:{color_var};stop-opacity:.4"/>'
+            f'<stop offset="100%" style="stop-color:{color_var};stop-opacity:1"/>'
+            f"</linearGradient>"
+        )
+    svg.append("</defs>")
+
+    pasos = 4
+    for i in range(pasos + 1):
+        val = round(y_max / pasos * i, 1)
+        y = top_pad + plot_h - escala(val)
+        svg.append(f'<line x1="{left_pad}" y1="{y:.1f}" x2="{width - right_pad}" y2="{y:.1f}" class="grid-line" />')
+        svg.append(f'<text x="{left_pad - 6}" y="{y + 3:.1f}" class="axis-label" text-anchor="end">{fmt_n(val)}%</text>')
+
+    # Sin texto flotante pegado a la línea -- con datasets donde el 5% y el
+    # 10% quedan cerca (basta que el % real ronde el doble) los dos textos
+    # se pisaban sin importar dónde se ubicaran. La referencia va en una
+    # leyenda fija fuera del SVG (ver build_tolerancia()), las líneas solo
+    # marcan la posición.
+    for umbral, color_var in ((tope, "var(--bad)"), (doble, "var(--bad-dark)")):
+        if umbral <= y_max:
+            y = top_pad + plot_h - escala(umbral)
+            svg.append(f'<line x1="{left_pad}" y1="{y:.1f}" x2="{width - right_pad}" y2="{y:.1f}" stroke="{color_var}" stroke-width="1.4" stroke-dasharray="5,4" opacity="0.85" />')
+
+    for i, (key, v) in enumerate(items):
+        x = left_pad + i * (bar_w + bar_gap)
+        pct = v["pct"]
+        bar_h = escala(pct)
+        y = top_pad + plot_h - bar_h
+        color_var = color_tolerancia(pct)
+        fill = f"url(#{grad_id[color_var]})"
+        detalle_extra = f" — {v['awb']} ({v['aerolinea']})" if v.get("awb") else ""
+        titulo = (
+            f"{label_fn(key)}{detalle_extra}: {fmt_pct(pct)} ({v['incidentes']} de {v['evaluables']} guías) "
+            f"— {fmt_kg(v['kilos'])} afectados"
+        )
+        svg.append(
+            f'<g class="bar-g"><title>{titulo}</title>'
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(bar_h, 1):.1f}" rx="2" fill="{fill}" />'
+            f"</g>"
+        )
+        step = max(1, n // 16)
+        if i % step == 0 or i == n - 1:
+            lx = x + bar_w / 2
+            svg.append(f'<text x="{lx:.1f}" y="{height - bottom_pad + 16}" class="axis-label axis-x" text-anchor="end" transform="rotate(-55 {lx:.1f} {height - bottom_pad + 16})">{label_fn(key)}</text>')
+
+    svg.append("</svg>")
+    return "".join(svg)
+
+
+def _tolerancia_por_vuelo():
+    """Agrega el universo evaluable 2026 por VUELO ESPERADO (no el real) --
+    cada guía evaluable ya trae su vuelo_esperado; se cruza con
+    vuelos_calendario (mismos timestamps, ver extractor) para el AWB/aerolínea.
+    Da, por vuelo puntual, cuántas guías le correspondían y cuántas no lo
+    alcanzaron (fueron al siguiente o más allá) -- la misma lógica que
+    por_semana/por_mes pero al grano de un vuelo. Se calcula acá (no en el
+    extractor) porque universo_evaluable_2026 ya trae todo lo necesario."""
+    vuelo_info = {v["ts"]: v for v in data["vuelos_calendario"]}
+    agg = {}
+    for r in data["universo_evaluable_2026"]:
+        ts = r["vuelo_esperado"]
+        if ts not in vuelo_info:
+            continue
+        b = agg.setdefault(ts, {"evaluables": 0, "incidentes": 0, "kilos": 0.0, "kilos_evaluables": 0.0})
+        b["evaluables"] += 1
+        b["kilos_evaluables"] += r["peso"] or 0
+        if r["no_volo_estricto"]:
+            b["incidentes"] += 1
+            b["kilos"] += r["peso"] or 0
+
+    out = []
+    for ts, v in sorted(agg.items()):
+        info = vuelo_info[ts]
+        pct = round(v["incidentes"] / v["evaluables"] * 100, 1) if v["evaluables"] else 0
+        out.append((ts, {
+            "evaluables": v["evaluables"], "incidentes": v["incidentes"], "pct": pct,
+            "kilos": round(v["kilos"], 1), "kilos_evaluables": round(v["kilos_evaluables"], 1),
+            "awb": info.get("awb", ""), "aerolinea": info.get("aerolinea", ""),
+        }))
+    return out
+
+
 def build_tolerancia(dom_id, incluir_tabla=True):
     """Bloque "Tolerancia acordada" (pedido de Jorge, 2026-09-04): se acepta
     un máximo de TOLERANCIA_MAX_PCT% de guías que no vuelan en su vuelo
@@ -276,6 +442,8 @@ def build_tolerancia(dom_id, incluir_tabla=True):
     tope_kg = ev_kg * TOLERANCIA_MAX_PCT / 100
     exceso_g = max(0, round(af_g - tope_g))
     exceso_kg = max(0, round(af_kg - tope_kg, 1))
+
+    gauge = gauge_tolerancia_html(pct_g)
 
     kpis = f"""
     <div class="kpis">
@@ -327,6 +495,41 @@ def build_tolerancia(dom_id, incluir_tabla=True):
     </div>
 """
 
+    chart = ""
+    if incluir_tabla:
+        def label_vuelo_tol(ts):
+            d = date.fromisoformat(ts[:10])
+            return f"{d.day:02d}-{MESES_ES[d.month - 1]}"
+
+        chart_semanal = barra_tolerancia_svg(sorted(b["por_semana"].items()), semana_label, f"{dom_id}-gs")
+        chart_mensual = barra_tolerancia_svg(sorted(b["por_mes"].items()), mes_label, f"{dom_id}-gm")
+        chart_porvuelo = barra_tolerancia_svg(_tolerancia_por_vuelo(), label_vuelo_tol, f"{dom_id}-gv")
+        chart = f"""
+    <h3 style="font-family:'Russo One',sans-serif;font-weight:400;font-size:12.5px;margin:22px 0 4px">¿En qué períodos nos pasamos del {fmt_pct(TOLERANCIA_MAX_PCT)}?</h3>
+    <p class="sub" style="margin-bottom:8px">
+      Cada barra se colorea según en qué tramo cayó ese período. "Por vuelo" agrupa por el vuelo
+      que le correspondía a cada guía (no en el que terminó volando).
+    </p>
+    <div class="tol-gauge-legend" style="margin:0 0 12px">
+      <span class="tg-leg"><i class="solid" style="background:var(--good)"></i>Holgado</span>
+      <span class="tg-leg"><i class="solid" style="background:var(--warn)"></i>Cerca del {fmt_pct(TOLERANCIA_MAX_PCT)}</span>
+      <span class="tg-leg"><i class="solid" style="background:var(--bad)"></i>Sobre la tolerancia</span>
+      <span class="tg-leg"><i class="solid" style="background:var(--bad-dark)"></i>Sobre el doble — grave</span>
+      <span class="tg-leg"><i style="border-color:var(--bad)"></i>Línea: tolerancia {fmt_pct(TOLERANCIA_MAX_PCT)}</span>
+      <span class="tg-leg"><i style="border-color:var(--bad-dark)"></i>Línea: doble {fmt_pct(TOLERANCIA_MAX_PCT * 2)}</span>
+    </div>
+    <div class="toggle">
+      <button id="btn-{dom_id}-chart-semanal" class="active" onclick="verVista3('{dom_id}','semanal')">Semanal</button>
+      <button id="btn-{dom_id}-chart-mensual" onclick="verVista3('{dom_id}','mensual')">Mensual</button>
+      <button id="btn-{dom_id}-chart-porvuelo" onclick="verVista3('{dom_id}','porvuelo')">Por vuelo</button>
+    </div>
+    <div class="chart-wrap">
+      <div id="view-{dom_id}-chart-semanal" class="view active">{chart_semanal}</div>
+      <div id="view-{dom_id}-chart-mensual" class="view">{chart_mensual}</div>
+      <div id="view-{dom_id}-chart-porvuelo" class="view">{chart_porvuelo}</div>
+    </div>
+"""
+
     return f"""
   <section id="sec-{dom_id}">
     <h2>Tolerancia acordada — máximo {fmt_pct(TOLERANCIA_MAX_PCT)} de guías al vuelo siguiente</h2>
@@ -336,7 +539,9 @@ def build_tolerancia(dom_id, incluir_tabla=True):
       exacto", individuales + consolidadas). Todo lo que supera ese tope es <b>exceso sobre la
       tolerancia</b> — en guías y en kilos.
     </p>
+    {gauge}
     {kpis}
+    {chart}
     {tabla}
   </section>
 """
@@ -2047,7 +2252,7 @@ HTML = f"""<!DOCTYPE html>
     --bg: var(--2e-blue-darker); --surface: #13233A; --surface-2: #182B45;
     --ink: var(--2e-white); --ink-faint: var(--2e-grey-dark);
     --line: rgba(167,197,225,0.14);
-    --good: #34C77A; --warn: #E8A23D; --bad: var(--2e-red);
+    --good: #34C77A; --warn: #E8A23D; --bad: var(--2e-red); --bad-dark: #7A1220;
   }}
   /* Modo claro (pedido de Jorge, 2026-09-01: el oscuro no se ve bien
      compartiendo pantalla) -- solo se remapean fondo/superficie/texto, los
@@ -2097,6 +2302,33 @@ HTML = f"""<!DOCTYPE html>
   .kpi .v {{ font-family: 'Russo One', system-ui, sans-serif; font-size: 22px; }}
   .kpi .l {{ font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); margin-top: 4px; }}
   .kpi.bad .v {{ color: var(--bad); }}
+  /* Barra de progreso / gauge de tolerancia (pedido de Jorge, 2026-09-04):
+     track con degradado verde -> amarillo -> rojo -> rojo oscuro (fijo, es
+     la escala de riesgo), con un marcador que cae donde esté el % real. El
+     degradado en sí (background-image) se inyecta inline por instancia
+     porque las posiciones dependen del valor máximo elegido para el eje. */
+  .tol-gauge {{ margin: 4px 0 24px; }}
+  .tol-gauge-track {{
+    position: relative; height: 20px; border-radius: 10px; border: 1px solid var(--line);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.15);
+  }}
+  .tol-gauge-tick {{ position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1px dashed rgba(255,255,255,.6); }}
+  .tol-gauge-tick.doble {{ border-left-color: rgba(255,255,255,.9); border-left-width: 2px; }}
+  .tol-gauge-marker {{
+    position: absolute; top: -7px; bottom: -7px; width: 4px; margin-left: -2px;
+    background: var(--ink); border-radius: 3px; box-shadow: 0 0 0 2px var(--surface);
+  }}
+  .tol-gauge-marker .tg-marker-label {{
+    position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+    font-family: 'Russo One', system-ui, sans-serif; font-size: 13px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    padding: 3px 9px; white-space: nowrap;
+  }}
+  .tol-gauge-scale {{ display: flex; justify-content: space-between; font-size: 9.5px; color: var(--ink-faint); margin-top: 24px; }}
+  .tol-gauge-legend {{ display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; }}
+  .tg-leg {{ display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--ink-faint); }}
+  .tg-leg i {{ display: inline-block; width: 14px; height: 0; border-top: 2px dashed; flex-shrink: 0; }}
+  .tg-leg i.solid {{ width: 10px; height: 10px; border-radius: 3px; border-top: none; }}
   section {{ margin-bottom: 30px; }}
   .toggle {{ display: inline-flex; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 3px; margin-bottom: 14px; max-width: 100%; }}
   .toggle button {{ font-family: 'Fira Sans', sans-serif; font-size: 12px; font-weight: 600; padding: 7px 16px; border: none; border-radius: 8px; background: transparent; color: var(--ink-faint); cursor: pointer; white-space: nowrap; }}
@@ -2428,6 +2660,18 @@ HTML = f"""<!DOCTYPE html>
     ['semanal', 'mensual', 'porvuelo'].forEach(function (s) {{
       document.getElementById('view-capacidad-chart-' + s).classList.toggle('active', s === v);
       document.getElementById('btn-capacidad-' + s).classList.toggle('active', s === v);
+    }});
+  }}
+  // Igual que verVistaCapacidad pero generico (recibe el dom_id como
+  // primer argumento) -- usado por el grafico de Tolerancia acordada, que
+  // se embebe en mas de una pestaña (Resumen y Guias afectadas) con ids
+  // distintos (pedido de Jorge, 2026-09-04).
+  function verVista3(scope, v) {{
+    ['semanal', 'mensual', 'porvuelo'].forEach(function (s) {{
+      var pane = document.getElementById('view-' + scope + '-chart-' + s);
+      var btn = document.getElementById('btn-' + scope + '-chart-' + s);
+      if (pane) pane.classList.toggle('active', s === v);
+      if (btn) btn.classList.toggle('active', s === v);
     }});
   }}
   function verTablaCapacidad(v) {{
