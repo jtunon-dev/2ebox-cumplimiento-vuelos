@@ -1738,10 +1738,15 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         Cumplimiento por día de la semana ({titulo_bloque})
       </h3>
       <p class="sub" style="margin-bottom:8px">
-        Por cada día de la semana en que una guía quedó lista para volar (lunes a domingo), cuántas
-        de esas guías terminaron subiéndose a tiempo bajo este criterio (no cuentan como afectadas)
-        — sobre el total de guías que quedaron listas ese mismo día de semana, mes a mes. Se
-        recalcula con los filtros de la izquierda.
+        Cada celda cruza un <b>mes</b> (fila) con el <b>día de la semana</b> (columna) en que las
+        guías quedaron listas para volar (pago + factura en Miami). El número grande es el
+        <b>% de cumplimiento</b>: de todas las guías que quedaron listas ese día de semana en ese
+        mes, qué porción alcanzó a volar a tiempo (no contó como afectada bajo el criterio
+        "{titulo_bloque}"). El número chico de abajo es el conteo exacto (a tiempo / total).
+        <br><b>Ejemplo:</b> una celda en la fila <i>Ago 2026</i>, columna <i>Mié</i>, que diga
+        "<b>98%</b> · 314/320" se lee: de las 320 guías que quedaron listas un miércoles de
+        agosto, 314 (el 98%) volaron a tiempo y 6 contaron como afectadas. Verde = cumplimiento
+        alto, rojo = bajo. Se recalcula con los filtros de la izquierda.
       </p>
       <div class="heatmap-legend">
         <span>0% cumplimiento</span>
@@ -1935,9 +1940,13 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
           }}
           var o = ok[k] || 0;
           var pct = (o / t) * 100;
+          // El número visible ES el % de cumplimiento (mismo que el color).
+          // El conteo exacto (o de t) queda en el tooltip.
           html += '<td class="heatmap-cell" style="background:' + gaHeatColor(pct) + '" title="' +
             (GA_MESES_LABEL[mo] || mo) + ', ' + GA_DOW_LABEL[dow] + ': ' + o + ' de ' + t +
-            ' guías subieron a tiempo (' + pct.toFixed(0) + '%)">' + o + '</td>';
+            ' guías subieron a tiempo (' + pct.toFixed(0) + '% de cumplimiento)">' +
+            '<div class="hm-pct">' + pct.toFixed(0) + '%</div>' +
+            '<div class="hm-n">' + o + '/' + t + '</div></td>';
         }}
         html += '</tr>';
       }});
@@ -2417,20 +2426,26 @@ HTML = f"""<!DOCTYPE html>
   }}
   /* Heatmap "Cumplimiento por día de la semana" dentro de Guías afectadas
      (pedido de Jorge, 2026-09-03, ajustado a día de SEMANA 2026-09-04):
-     filas = mes, columnas = día de semana (lunes a domingo), color de cada
-     celda = % de guías que quedaron listas ese día y subieron a tiempo bajo
-     el criterio activo. Se recalcula en JS junto con el resto de la
-     pestaña -- ver gaRenderHeatmap(). */
+     filas = mes, columnas = día de semana (lunes a domingo). El número y el
+     color de cada celda = % de guías que quedaron listas ese día y subieron
+     a tiempo bajo el criterio activo. Se recalcula en JS junto con el resto
+     de la pestaña -- ver gaRenderHeatmap(). El contenedor se ajusta al
+     ancho real de la tabla (no ocupa todo el margen -- Jorge, 2026-09-07). */
   .heatmap-legend {{ display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--ink-faint); margin-bottom: 10px; }}
   .heatmap-legend-bar {{
     display: inline-block; width: 140px; height: 8px; border-radius: 4px;
     background: linear-gradient(to right, #E3203E, #E8A23D, #34C77A);
   }}
-  .heatmap-scroll {{ overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; margin-bottom: 24px; }}
-  .heatmap-tabla {{ border-collapse: collapse; font-size: 11px; white-space: nowrap; }}
-  .heatmap-tabla th {{ font-weight: 600; color: var(--ink-faint); padding: 4px 5px; text-align: center; position: sticky; top: 0; background: var(--surface); }}
-  .heatmap-tabla th.heatmap-mes {{ text-align: right; position: sticky; left: 0; z-index: 1; padding-right: 10px; }}
-  .heatmap-cell {{ width: 56px; height: 30px; text-align: center; color: #0D1721; font-weight: 700; border: 1px solid var(--bg); }}
+  .heatmap-scroll {{
+    overflow-x: auto; border: 1px solid var(--line); border-radius: 14px;
+    margin-bottom: 24px; width: -moz-fit-content; width: fit-content; max-width: 100%;
+  }}
+  .heatmap-tabla {{ border-collapse: collapse; font-size: 12px; }}
+  .heatmap-tabla th {{ font-weight: 600; color: var(--ink-faint); padding: 6px 8px; text-align: center; position: sticky; top: 0; background: var(--surface); }}
+  .heatmap-tabla th.heatmap-mes {{ text-align: right; position: sticky; left: 0; z-index: 1; padding-right: 12px; background: var(--surface); min-width: 84px; }}
+  .heatmap-cell {{ width: 74px; height: 46px; text-align: center; color: #0D1721; border: 2px solid var(--bg); line-height: 1.15; }}
+  .heatmap-cell .hm-pct {{ font-weight: 700; font-size: 13px; }}
+  .heatmap-cell .hm-n {{ font-size: 9.5px; opacity: 0.72; }}
   .heatmap-cell.vacia {{ background: var(--surface-2); border-color: var(--line); }}
   .kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 26px; }}
   .kpi {{ background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }}
