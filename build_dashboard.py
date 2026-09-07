@@ -653,18 +653,12 @@ def build_resumen_ejecutivo():
     ev_g = b["total_evaluables"]
     ev_kg = b["total_kilos_evaluables"]
     ev_cl = b["total_clientes_evaluables"]
-    af_g = b["total_incidentes"]
-    af_kg = b["total_kilos"]
-    af_cl = b["total_clientes"]
-
-    pct_g = round(af_g / ev_g * 100, 1) if ev_g else 0
-    pct_kg = round(af_kg / ev_kg * 100, 1) if ev_kg else 0
-    pct_cl = round(af_cl / ev_cl * 100, 1) if ev_cl else 0
 
     est = data["estricto"]
     sem = data["semana"]
     pct_est = round(est["total_incidentes"] / est["total_evaluables"] * 100, 1) if est["total_evaluables"] else 0
     pct_sem = round(sem["total_incidentes"] / sem["total_evaluables"] * 100, 1) if sem["total_evaluables"] else 0
+    pct_uno = round(b["total_incidentes"] / b["total_evaluables"] * 100, 1) if b["total_evaluables"] else 0
 
     # "Semana a semana / mes a mes": la tabla es filtrable por criterio
     # (pedido de Jorge, 2026-09-07). La regla permisiva "+1 vuelo" deja de
@@ -709,7 +703,31 @@ def build_resumen_ejecutivo():
             )
     res_views_html = "\n".join(res_views)
     res_crit_btns_html = "\n".join(res_crit_btns)
-    res_crit_desc_default = criterios_resumen[0][3]
+
+    # KPIs de "Cuántas resultaron afectadas": ahora cambian con el mismo
+    # toggle de criterio que la tabla (pedido de Jorge, 2026-09-07 -- opción
+    # B). Se pre-calculan los 3 juegos de valores + título + descripción y
+    # verCriterioResumen() los intercambia en el DOM.
+    res_titulos = {
+        "estricto": "Cuántas resultaron afectadas — criterio regular (vuelo exacto)",
+        "semana": "Cuántas resultaron afectadas — criterio misma semana",
+        "unvuelo": "Cuántas resultaron afectadas — criterio permisivo (+1 vuelo)",
+    }
+
+    def _kpi_crit(blk):
+        g, kg, cl = blk["total_incidentes"], blk["total_kilos"], blk["total_clientes"]
+        return {
+            "g": f"{fmt_n(g)} · {fmt_pct(round(g / ev_g * 100, 1) if ev_g else 0)}",
+            "kg": f"{fmt_kg(kg)} · {fmt_pct(round(kg / ev_kg * 100, 1) if ev_kg else 0)}",
+            "cl": f"{fmt_n(cl)} · {fmt_pct(round(cl / ev_cl * 100, 1) if ev_cl else 0)}",
+        }
+
+    resumen_kpi_data = {
+        cid: {**_kpi_crit(blk), "titulo": res_titulos[cid], "desc": desc}
+        for cid, _lbl, blk, desc in criterios_resumen
+    }
+    resumen_kpi_json = json.dumps(resumen_kpi_data, ensure_ascii=False)
+    kpi_def = resumen_kpi_data["estricto"]
 
     return f"""
   <p class="sub">
@@ -732,18 +750,17 @@ def build_resumen_ejecutivo():
   </section>
 
   <section>
-    <h2>Cuántas resultaron afectadas — con margen de saltarse 1 vuelo</h2>
-    <p class="sub" style="margin-bottom:14px">
-      Una guía cuenta como <b>afectada</b> solo si se <b>saltó más de un vuelo</b> (no alcanzó
-      ni el que le correspondía ni el inmediatamente siguiente), o si todavía no ha volado.
-      Perder el vuelo pero enganchar el siguiente <b>no</b> cuenta acá — es la lectura más
-      exigente de "se quedó de verdad atrás".
-    </p>
-    <div class="kpis">
-      <div class="kpi bad"><div class="v">{fmt_n(af_g)} · {fmt_pct(pct_g)}</div><div class="l">Guías afectadas de {fmt_n(ev_g)}</div></div>
-      <div class="kpi bad"><div class="v">{fmt_kg(af_kg)} · {fmt_pct(pct_kg)}</div><div class="l">Kilos afectados de {fmt_kg(ev_kg)}</div></div>
-      <div class="kpi bad"><div class="v">{fmt_n(af_cl)} · {fmt_pct(pct_cl)}</div><div class="l">Clientes afectados de {fmt_n(ev_cl)}</div></div>
+    <h2 id="resumen-kpi-titulo">{kpi_def['titulo']}</h2>
+    <div class="toggle" id="toggle-resumen-crit">
+      {res_crit_btns_html}
     </div>
+    <p class="sub" id="resumen-kpi-desc" style="margin:6px 0 14px">{kpi_def['desc']}</p>
+    <div class="kpis">
+      <div class="kpi bad"><div class="v" id="rk-g">{kpi_def['g']}</div><div class="l">Guías afectadas de {fmt_n(ev_g)}</div></div>
+      <div class="kpi bad"><div class="v" id="rk-kg">{kpi_def['kg']}</div><div class="l">Kilos afectados de {fmt_kg(ev_kg)}</div></div>
+      <div class="kpi bad"><div class="v" id="rk-cl">{kpi_def['cl']}</div><div class="l">Clientes afectados de {fmt_n(ev_cl)}</div></div>
+    </div>
+    <script>window.RESUMEN_KPI = {resumen_kpi_json};</script>
   </section>
 
   {build_tolerancia("resumen-tol", incluir_tabla=True)}
@@ -751,18 +768,14 @@ def build_resumen_ejecutivo():
   <section>
     <h2>Semana a semana / mes a mes</h2>
     <p class="sub" style="margin-bottom:12px">
-      Guías afectadas contadas en la semana/mes del vuelo que les correspondía. Elige el
-      criterio abajo. "% kilos afect." = kilos afectados sobre los kilos totales de ese
-      período. Los colores de los % usan la misma escala que la tolerancia acordada:
-      <span style="color:var(--good)">verde</span> bajo {fmt_pct(TOLERANCIA_MAX_PCT * 0.6)},
+      Guías afectadas contadas en la semana/mes del vuelo que les correspondía, bajo el
+      <b>criterio elegido arriba</b>. "% kilos afect." = kilos afectados sobre los kilos
+      totales de ese período. Los colores de los % usan la misma escala que la tolerancia
+      acordada: <span style="color:var(--good)">verde</span> bajo {fmt_pct(TOLERANCIA_MAX_PCT * 0.6)},
       <span style="color:var(--warn)">ámbar</span> cerca del {fmt_pct(TOLERANCIA_MAX_PCT)},
       <span style="color:var(--bad)">rojo</span> sobre {fmt_pct(TOLERANCIA_MAX_PCT)},
       <span style="color:var(--bad-dark)">rojo oscuro</span> sobre {fmt_pct(TOLERANCIA_MAX_PCT * 2)}.
     </p>
-    <div class="toggle" id="toggle-resumen-crit">
-      {res_crit_btns_html}
-    </div>
-    <p class="sub" id="resumen-crit-desc" style="margin:-2px 0 12px;font-size:12px">{res_crit_desc_default}</p>
     <div class="toggle">
       <button id="btn-resumen-per-semanal" class="active" onclick="verPeriodoResumen('semanal')">Semanal</button>
       <button id="btn-resumen-per-mensual" onclick="verPeriodoResumen('mensual')">Mensual</button>
@@ -774,20 +787,22 @@ def build_resumen_ejecutivo():
 
   {explica_panel([
       (
-          "🟢", "Este número (saltarse 1 vuelo)",
-          f"{fmt_n(af_g)} guías ({fmt_pct(pct_g)}). Es el criterio más permisivo — solo "
-          "cuenta a las que no alcanzaron ni su vuelo ni el siguiente.",
+          "🎯", "Criterio regular (vuelo exacto)",
+          f"{fmt_n(est['total_incidentes'])} guías ({fmt_pct(pct_est)}). La norma: cuenta como "
+          "afectada cualquier guía que no subió exactamente al vuelo que le correspondía según "
+          "el horario de corte, aunque haya tomado el siguiente. Es el criterio por defecto.",
       ),
       (
-          "🎯", "Criterio \"vuelo exacto\"",
-          f"{fmt_n(est['total_incidentes'])} guías ({fmt_pct(pct_est)}). Cuenta como afectada "
-          "cualquier guía que no subió exactamente a su vuelo, aunque haya tomado el "
-          "siguiente. Pestaña Individuales / Consolidadas / Guías afectadas.",
-      ),
-      (
-          "📅", "Criterio \"misma semana\"",
+          "📅", "Criterio misma semana",
           f"{fmt_n(sem['total_incidentes'])} guías ({fmt_pct(pct_sem)}). Punto intermedio: "
-          "cuenta solo si voló en una semana calendario posterior.",
+          "cuenta solo si la guía voló en una semana calendario posterior a la que le "
+          "correspondía.",
+      ),
+      (
+          "🟢", "Criterio permisivo (+1 vuelo)",
+          f"{fmt_n(b['total_incidentes'])} guías ({fmt_pct(pct_uno)}). El más permisivo — solo "
+          "cuenta a las que no alcanzaron ni su vuelo ni el inmediatamente siguiente (o no han "
+          "volado). Es el piso mínimo: las que de verdad se quedaron atrás.",
       ),
   ])}
 """
@@ -835,6 +850,26 @@ def build_capacidad_vuelos():
     # "% sobre capacidad" se mide en KILOS (pedido de Jorge, 2026-09-07):
     # kg_podria / kg_ingreso -- el excedente relevante es el de carga, no el
     # conteo de guías. 100% = el vuelo se llevó todos los kilos listos.
+    # "No volaron su semana" (pedido de Jorge, 2026-09-07 -- opción B para
+    # el descuadre W36): guías cuyo vuelo correspondiente era ese período y
+    # que NO volaron en ninguna de sus semanas -- volaron una semana
+    # posterior o siguen sin volar. Es el criterio "misma semana"
+    # (data["semana"]) contado por período de vuelo esperado. A diferencia
+    # del "excedente" (foto de la cola al cierre de la semana), esta cifra
+    # NO incluye a las guías que perdieron su vuelo puntual pero engancharon
+    # otro de la misma semana -- es la demanda que la semana de verdad no
+    # pudo absorber.
+    afect_semana = data["semana"]["por_semana"]
+    afect_mes = data["semana"]["por_mes"]
+    for wk, b in por_semana.items():
+        af = afect_semana.get(wk, {})
+        b["no_volo_sem_g"] = af.get("incidentes", 0)
+        b["no_volo_sem_kg"] = round(af.get("kilos", 0), 1)
+    for mo, b in por_mes.items():
+        af = afect_mes.get(mo, {})
+        b["no_volo_sem_g"] = af.get("incidentes", 0)
+        b["no_volo_sem_kg"] = round(af.get("kilos", 0), 1)
+
     for b in list(por_semana.values()) + list(por_mes.values()):
         b["excedente"] = max(0, b["n_podria"] - b["n_ingreso"])
         b["kg_excedente"] = round(max(0, b["kg_podria"] - b["kg_ingreso"]), 1)
@@ -877,6 +912,15 @@ def build_capacidad_vuelos():
             f"<td data-v='{c['pct_capacidad']}' style='color:{color_exceso(c['pct_capacidad'])};font-weight:700'>{fmt_pct(c['pct_capacidad'])}</td></tr>"
         )
 
+    def _celda_no_volo(b):
+        g = b.get("no_volo_sem_g", 0)
+        col = color_por_pct(40) if g else "var(--ink-faint)"
+        return (
+            f"<td data-v='{g}' style='color:{col};font-weight:700'>"
+            f"{fmt_n(g)} <span style='font-weight:400;color:var(--ink-faint);font-size:11px'>"
+            f"({fmt_kg(b.get('no_volo_sem_kg', 0))})</span></td>"
+        )
+
     def fila_semana(wk, b):
         return (
             f"<tr data-fecha='{wk}'><td data-v='{date.fromisoformat(wk).isocalendar()[1]}'>{semana_numero(wk)}</td>"
@@ -888,6 +932,7 @@ def build_capacidad_vuelos():
             f"<td data-v='{b['kg_podria']}'>{fmt_kg(b['kg_podria'])}</td>"
             f"<td data-v='{b['kg_excedente']}' style='color:{color_exceso(b['pct_capacidad'])};font-weight:700'>{fmt_kg(b['kg_excedente'])}</td>"
             f"<td data-v='{b['excedente']}'>{fmt_n(b['excedente'])}</td>"
+            f"{_celda_no_volo(b)}"
             f"<td data-v='{b['pct_capacidad']}' style='color:{color_exceso(b['pct_capacidad'])};font-weight:700'>{fmt_pct(b['pct_capacidad'])}</td></tr>"
         )
 
@@ -901,6 +946,7 @@ def build_capacidad_vuelos():
             f"<td data-v='{b['kg_podria']}'>{fmt_kg(b['kg_podria'])}</td>"
             f"<td data-v='{b['kg_excedente']}' style='color:{color_exceso(b['pct_capacidad'])};font-weight:700'>{fmt_kg(b['kg_excedente'])}</td>"
             f"<td data-v='{b['excedente']}'>{fmt_n(b['excedente'])}</td>"
+            f"{_celda_no_volo(b)}"
             f"<td data-v='{b['pct_capacidad']}' style='color:{color_exceso(b['pct_capacidad'])};font-weight:700'>{fmt_pct(b['pct_capacidad'])}</td></tr>"
         )
 
@@ -929,9 +975,13 @@ def build_capacidad_vuelos():
         }
 
     def color_dif_max(pct):
-        if pct > 15:
+        # Invertido (Jorge, 2026-09-07): ir BAJO el nominal de 400 kg/vuelo
+        # es capacidad desaprovechada (rojo); llegar al nominal o pasarlo
+        # -- dentro de la holgura del fiscalizador -- es mover más carga
+        # (verde). Franja ámbar apenas por debajo del tope.
+        if pct < -5:
             return "var(--bad)"
-        if pct > 0:
+        if pct < 0:
             return "var(--warn)"
         return "var(--good)"
 
@@ -1029,9 +1079,19 @@ def build_capacidad_vuelos():
       ),
       (
           "📈", "\"Excedente\" = demanda sin subir",
-          "Todo lo que no alcanzó a subir. <b>No</b> es capacidad desperdiciada — es "
-          "demanda que superó el cupo del vuelo. El filtro de fecha de arriba recalcula "
+          "Foto de la cola de guías listas al cierre de la semana. <b>No</b> es capacidad "
+          "desperdiciada — es demanda que superó el cupo del vuelo. Incluye guías de "
+          "semanas anteriores que siguen esperando. El filtro de fecha de arriba recalcula "
           "estos KPIs y las 3 tablas (no los gráficos, que quedan con el año completo).",
+      ),
+      (
+          "🔁", "\"No volaron su semana\" ≠ \"guías afectadas (vuelo exacto)\"",
+          "Guías cuyo vuelo correspondiente era esa semana y que <b>no volaron en ninguno "
+          "de los vuelos de la semana</b> (volaron una semana después o siguen sin volar). "
+          "Es la demanda que la semana de verdad no pudo absorber — se compara con el "
+          "excedente. La cifra de \"Guías afectadas / vuelo exacto\" es mayor porque ahí "
+          "también cuentan las que perdieron su vuelo puntual pero engancharon otro de la "
+          "misma semana (capacidad hubo, solo que no en el vuelo exacto).",
       ),
   ])}
 
@@ -1079,7 +1139,8 @@ def build_capacidad_vuelos():
           <th onclick="ordenarTabla('tabla-capacidad-semanal',6,'num')">Kilos podrían</th>
           <th onclick="ordenarTabla('tabla-capacidad-semanal',7,'num')">Excedente (kg)</th>
           <th onclick="ordenarTabla('tabla-capacidad-semanal',8,'num')">Excedente (guías)</th>
-          <th onclick="ordenarTabla('tabla-capacidad-semanal',9,'num')">% sobre capacidad (kg)</th>
+          <th onclick="ordenarTabla('tabla-capacidad-semanal',9,'num')">No volaron su semana</th>
+          <th onclick="ordenarTabla('tabla-capacidad-semanal',10,'num')">% sobre capacidad (kg)</th>
         </tr></thead>
         <tbody>{tabla_semana}</tbody></table>
       </div>
@@ -1093,7 +1154,8 @@ def build_capacidad_vuelos():
           <th onclick="ordenarTabla('tabla-capacidad-mes',5,'num')">Kilos podrían</th>
           <th onclick="ordenarTabla('tabla-capacidad-mes',6,'num')">Excedente (kg)</th>
           <th onclick="ordenarTabla('tabla-capacidad-mes',7,'num')">Excedente (guías)</th>
-          <th onclick="ordenarTabla('tabla-capacidad-mes',8,'num')">% sobre capacidad (kg)</th>
+          <th onclick="ordenarTabla('tabla-capacidad-mes',8,'num')">No volaron su semana</th>
+          <th onclick="ordenarTabla('tabla-capacidad-mes',9,'num')">% sobre capacidad (kg)</th>
         </tr></thead>
         <tbody>{tabla_mes}</tbody></table>
       </div>
@@ -1122,8 +1184,10 @@ def build_capacidad_vuelos():
       <b>{fmt_n(KG_MAX_POR_VUELO)} kg por vuelo</b>, con holgura a criterio del fiscalizador —
       hay vuelos que van bajo {fmt_n(KG_MAX_POR_VUELO)} kg y otros por encima.
       <br>"Kilos máximo" = n.º de vuelos × {fmt_n(KG_MAX_POR_VUELO)} kg.
-      "Dif. con máximo" = kilos ingresados − kilos máximo (<span style="color:var(--warn)">+
-      </span>= se pasaron del nominal; <span style="color:var(--good)">−</span> = quedó cupo).
+      "Dif. con máximo" = kilos ingresados − kilos máximo:
+      <span style="color:var(--good)">+</span> = llegaron al nominal o lo pasaron
+      (mueven más carga, aprovechando la holgura del fiscalizador);
+      <span style="color:var(--bad)">−</span> = quedaron bajo el nominal (cupo desaprovechado).
       "Dif. con demanda" = kilos listos que no alcanzaron a subir.
     </p>
     <div class="toggle">
@@ -3158,15 +3222,17 @@ HTML = f"""<!DOCTYPE html>
       }});
     }});
     Array.prototype.slice.call(document.querySelectorAll('#toggle-resumen-crit button')).forEach(function (btn) {{
-      var on = btn.getAttribute('data-crit') === resumenCrit;
-      btn.classList.toggle('active', on);
-      if (on) {{
-        var d = document.getElementById('resumen-crit-desc');
-        if (d) d.textContent = btn.getAttribute('data-desc') || '';
-      }}
+      btn.classList.toggle('active', btn.getAttribute('data-crit') === resumenCrit);
     }});
     document.getElementById('btn-resumen-per-semanal').classList.toggle('active', resumenPer === 'semanal');
     document.getElementById('btn-resumen-per-mensual').classList.toggle('active', resumenPer === 'mensual');
+    // KPIs + titulo + descripcion de "Cuantas resultaron afectadas"
+    var k = (window.RESUMEN_KPI || {{}})[resumenCrit];
+    if (k) {{
+      var set = function (id, val) {{ var el = document.getElementById(id); if (el) el.textContent = val; }};
+      set('rk-g', k.g); set('rk-kg', k.kg); set('rk-cl', k.cl);
+      set('resumen-kpi-titulo', k.titulo); set('resumen-kpi-desc', k.desc);
+    }}
   }}
   function verCriterioResumen(c) {{ resumenCrit = c; _resumenSync(); }}
   function verPeriodoResumen(p) {{ resumenPer = p; _resumenSync(); }}
