@@ -1935,7 +1935,10 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     }}
     // moKey/dowKey = campos por los que agrupar ('mo'/'vdow' -> por dia del
     // vuelo que le correspondia;  'hmo'/'hdow' -> por dia en que quedo lista).
-    function gaRenderHeatmap(universo, cumplidas, moKey, dowKey, containerId) {{
+    // meses = lista de meses a mostrar (la MISMA para las 2 tablas, para que
+    // queden iguales de alto -- Jorge, 2026-09-07). Las 2 tablas muestran
+    // siempre los 7 dias de semana, para que queden iguales de ancho.
+    function gaRenderHeatmap(universo, cumplidas, moKey, dowKey, containerId, meses) {{
       var tot = {{}}, ok = {{}};
       var totMes = {{}}, okMes = {{}}, totDow = [0,0,0,0,0,0,0], okDow = [0,0,0,0,0,0,0];
       var totAll = 0, okAll = 0;
@@ -1949,34 +1952,28 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         okMes[r[moKey]] = (okMes[r[moKey]] || 0) + 1;
         okDow[r[dowKey]] += 1; okAll += 1;
       }});
-      var meses = Array.from(new Set(universo.map(function (r) {{ return r[moKey]; }}))).sort();
       var cont = document.getElementById(containerId);
       if (!meses.length) {{
         cont.innerHTML = '<p class="empty-note">Sin guías para este filtro.</p>';
         return;
       }}
-      // Solo se muestran las columnas (días de semana) que tienen datos --
-      // la vista "por día del vuelo" en la práctica solo trae miércoles y
-      // viernes, mostrar 5 columnas vacías no aporta (Jorge, 2026-09-07).
-      var dias = [];
-      for (var d = 0; d <= 6; d++) if (totDow[d]) dias.push(d);
       var html = '<div class="heatmap-scroll"><table class="heatmap-tabla"><thead><tr><th></th>';
-      dias.forEach(function (dow) {{ html += '<th>' + GA_DOW_LABEL[dow] + '</th>'; }});
+      for (var d = 0; d <= 6; d++) html += '<th>' + GA_DOW_LABEL[d] + '</th>';
       html += '<th class="heatmap-tot">Total mes</th></tr></thead><tbody>';
       meses.forEach(function (mo) {{
         html += '<tr><th class="heatmap-mes">' + (GA_MESES_LABEL[mo] || mo) + '</th>';
-        dias.forEach(function (dow) {{
+        for (var dow = 0; dow <= 6; dow++) {{
           var k = mo + '-' + dow;
           html += gaCelda(ok[k] || 0, tot[k] || 0, (GA_MESES_LABEL[mo] || mo) + ' · ' + GA_DOW_LABEL[dow]);
-        }});
+        }}
         html += gaCelda(okMes[mo] || 0, totMes[mo] || 0, (GA_MESES_LABEL[mo] || mo) + ' · total del mes', 'heatmap-tot');
         html += '</tr>';
       }});
       // Fila de totales por día de semana (ponderado: suma a tiempo / suma total)
       html += '<tr><th class="heatmap-mes heatmap-tot">Total día</th>';
-      dias.forEach(function (dow) {{
+      for (var dow = 0; dow <= 6; dow++) {{
         html += gaCelda(okDow[dow], totDow[dow], GA_DOW_LABEL[dow] + ' · total de todos los meses', 'heatmap-tot');
-      }});
+      }}
       html += gaCelda(okAll, totAll, 'Total general', 'heatmap-tot heatmap-tot-all');
       html += '</tr></tbody></table></div>';
       cont.innerHTML = html;
@@ -1985,8 +1982,13 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     function gaRender() {{
       var res = gaFiltrar();
       var universo = res.universo, afectadas = res.afectadas;
-      gaRenderHeatmap(universo, res.cumplidas, 'mo', 'vdow', 'ga-heatmap-v-{sfx}');
-      gaRenderHeatmap(universo, res.cumplidas, 'hmo', 'hdow', 'ga-heatmap-l-{sfx}');
+      // misma lista de meses para las 2 tablas (unión de los meses del
+      // vuelo esperado y de la fecha lista) -> quedan iguales de alto.
+      var hmSet = {{}};
+      universo.forEach(function (r) {{ hmSet[r.mo] = 1; hmSet[r.hmo] = 1; }});
+      var hmMeses = Object.keys(hmSet).sort();
+      gaRenderHeatmap(universo, res.cumplidas, 'mo', 'vdow', 'ga-heatmap-v-{sfx}', hmMeses);
+      gaRenderHeatmap(universo, res.cumplidas, 'hmo', 'hdow', 'ga-heatmap-l-{sfx}', hmMeses);
       var col = GA_COLS[gaSort.col];
       afectadas.sort(function (a, b) {{
         var va = a[col], vb = b[col];
@@ -2464,16 +2466,23 @@ HTML = f"""<!DOCTYPE html>
     display: inline-block; width: 140px; height: 8px; border-radius: 4px;
     background: linear-gradient(to right, #E3203E, #E8A23D, #34C77A);
   }}
-  .heatmap-par {{ display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; margin-bottom: 24px; }}
+  .heatmap-par {{ display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; margin-bottom: 24px; }}
+  .heatmap-par > div {{ flex: 0 1 auto; }}
   .heatmap-caption {{ font-size: 11px; font-weight: 700; color: var(--ink); margin-bottom: 6px; letter-spacing: .02em; }}
   .heatmap-scroll {{
     overflow-x: auto; border: 1px solid var(--line); border-radius: 14px;
     width: -moz-fit-content; width: fit-content; max-width: 100%;
   }}
-  .heatmap-tabla {{ border-collapse: collapse; font-size: 12px; }}
-  .heatmap-tabla th {{ font-weight: 600; color: var(--ink-faint); padding: 6px 8px; text-align: center; position: sticky; top: 0; background: var(--surface); }}
-  .heatmap-tabla th.heatmap-mes {{ text-align: right; position: sticky; left: 0; z-index: 1; padding-right: 10px; background: var(--surface); min-width: 76px; }}
-  .heatmap-cell {{ width: 62px; height: 42px; text-align: center; color: #0D1721; border: 2px solid var(--bg); line-height: 1.12; }}
+  /* table-layout: fixed + anchos por la primera fila -> las 2 tablas quedan
+     exactamente iguales de ancho (mismo nº de columnas). width fijo (80 +
+     8 columnas x 64) para que el contenedor no la estire y las dos, con el
+     gap, se acerquen al ancho de la tabla de abajo. */
+  .heatmap-tabla {{ border-collapse: collapse; font-size: 12px; table-layout: fixed; width: 592px; }}
+  .heatmap-tabla thead th {{ width: 64px; }}
+  .heatmap-tabla thead th:first-child {{ width: 80px; }}
+  .heatmap-tabla th {{ font-weight: 600; color: var(--ink-faint); padding: 6px 4px; text-align: center; position: sticky; top: 0; background: var(--surface); }}
+  .heatmap-tabla th.heatmap-mes {{ text-align: right; position: sticky; left: 0; z-index: 1; padding-right: 10px; background: var(--surface); }}
+  .heatmap-cell {{ height: 42px; text-align: center; color: #0D1721; border: 2px solid var(--bg); line-height: 1.1; }}
   .heatmap-cell .hm-pct {{ font-weight: 700; font-size: 12.5px; }}
   .heatmap-cell .hm-n {{ font-size: 9px; opacity: 0.72; }}
   .heatmap-cell.vacia {{ background: var(--surface-2); border-color: var(--line); }}
