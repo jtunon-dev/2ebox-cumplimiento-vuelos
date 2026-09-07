@@ -161,7 +161,7 @@ def barra_svg(items, label_fn, width=980, height=260, bar_gap=6):
             f"{fmt_kg(v['kilos'])}, {v['clientes']} clientes"
         )
         svg.append(
-            f'<g class="bar-g"><title>{titulo}</title>'
+            f'<g class="bar-g" role="img" aria-label="{html.escape(titulo)}" data-tip="{html.escape(titulo)}">'
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(bar_h, 1):.1f}" rx="2" fill="{color}" />'
             f'</g>'
         )
@@ -353,7 +353,7 @@ def barra_capacidad_svg(items, label_fn, key_ingreso, key_podria, width=980, hei
         y_ingreso = top_pad + plot_h - h_ingreso
         titulo = f"{label_fn(key)}: {fmt_n(v[key_ingreso])} ingresadas de {fmt_n(v[key_podria])} que podrían haber ingresado"
         svg.append(
-            f'<g class="bar-g"><title>{titulo}</title>'
+            f'<g class="bar-g" role="img" aria-label="{html.escape(titulo)}" data-tip="{html.escape(titulo)}">'
             f'<rect x="{x:.1f}" y="{y_podria:.1f}" width="{bar_w:.1f}" height="{max(h_podria, 1):.1f}" rx="2" fill="var(--2e-blue-claro)" fill-opacity="0.5" stroke="var(--2e-blue)" stroke-opacity="0.3" />'
             f'<rect x="{x + bar_w * 0.18:.1f}" y="{y_ingreso:.1f}" width="{bar_w * 0.64:.1f}" height="{max(h_ingreso, 1):.1f}" rx="2" fill="var(--2e-blue)" />'
             f'</g>'
@@ -460,7 +460,7 @@ def barra_tolerancia_svg(items, label_fn, grad_prefix, width=980, height=260, ba
             f"— {fmt_kg(v['kilos'])} afectados"
         )
         svg.append(
-            f'<g class="bar-g"><title>{titulo}</title>'
+            f'<g class="bar-g" role="img" aria-label="{html.escape(titulo)}" data-tip="{html.escape(titulo)}">'
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(bar_h, 1):.1f}" rx="2" fill="{fill}" />'
             f"</g>"
         )
@@ -2568,8 +2568,19 @@ HTML = f"""<!DOCTYPE html>
   .chart-svg {{ width: 100%; height: auto; overflow: visible; }}
   .grid-line {{ stroke: var(--line); stroke-width: 1; }}
   .axis-label {{ font-size: 9px; fill: var(--ink-faint); font-family: 'Fira Sans', sans-serif; }}
-  .bar-g rect {{ transition: opacity .1s; }}
-  .bar-g:hover rect {{ opacity: .78; }}
+  .bar-g {{ cursor: pointer; outline: none; }}
+  .bar-g rect {{ transition: filter .12s ease, opacity .12s ease; }}
+  .bar-g:hover rect, .bar-g:focus-visible rect {{ filter: brightness(1.13) saturate(1.12); opacity: 1; }}
+  .bar-g:focus-visible rect {{ stroke: var(--ink); stroke-width: 1.5; }}
+  #chart-tip {{
+    position: fixed; z-index: 90; left: 0; top: 0; pointer-events: none;
+    max-width: 260px; padding: 7px 10px; border-radius: 8px;
+    background: var(--ink); color: var(--surface);
+    font-family: 'Fira Sans', sans-serif; font-size: 11.5px; line-height: 1.4;
+    box-shadow: 0 6px 20px rgba(0,0,0,.28);
+    opacity: 0; transform: translateY(3px); transition: opacity .1s ease, transform .1s ease;
+  }}
+  #chart-tip.on {{ opacity: 1; transform: none; }}
   .view {{ display: none; }}
   .view.active {{ display: block; }}
   table {{ width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 14px; }}
@@ -2672,6 +2683,7 @@ HTML = f"""<!DOCTYPE html>
 </style>
 </head>
 <body>
+<div id="chart-tip" role="status" aria-live="polite"></div>
 <div class="app">
   <div class="header-row">
     <h1>Cumplimiento de Vuelos — Guías 2ebox {data['anio_reporte']}</h1>
@@ -2908,6 +2920,54 @@ HTML = f"""<!DOCTYPE html>
       document.getElementById('btn-capacidad-tabla-' + s).classList.toggle('active', s === v);
     }});
   }}
+
+  // Tooltip flotante para los graficos de barra (pedido de Jorge,
+  // 2026-09-07): al pasar sobre una barra se resalta (CSS .bar-g:hover) y
+  // aparece una etiqueta con el valor que mide ese grafico. El texto vive
+  // en el atributo data-tip de cada <g class="bar-g">. Un solo <div>
+  // compartido, delegacion de eventos -> funciona con las barras que se
+  // generan dentro de vistas ocultas y con teclado (focus).
+  (function () {{
+    var tip = document.getElementById('chart-tip');
+    if (!tip) return;
+    function mover(ev) {{
+      var pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+      var x = ev.clientX + pad, y = ev.clientY + pad;
+      if (x + w > window.innerWidth - 8) x = ev.clientX - pad - w;
+      if (y + h > window.innerHeight - 8) y = ev.clientY - pad - h;
+      tip.style.left = Math.max(8, x) + 'px';
+      tip.style.top = Math.max(8, y) + 'px';
+    }}
+    function mostrar(g, ev) {{
+      var txt = g.getAttribute('data-tip');
+      if (!txt) return;
+      tip.textContent = txt;
+      tip.classList.add('on');
+      if (ev) mover(ev);
+    }}
+    function ocultar() {{ tip.classList.remove('on'); }}
+    document.addEventListener('mouseover', function (ev) {{
+      var g = ev.target.closest && ev.target.closest('.bar-g');
+      if (g) mostrar(g, ev);
+    }});
+    document.addEventListener('mousemove', function (ev) {{
+      if (!tip.classList.contains('on')) return;
+      var g = ev.target.closest && ev.target.closest('.bar-g');
+      if (g) mover(ev); else ocultar();
+    }});
+    document.addEventListener('mouseout', function (ev) {{
+      var g = ev.target.closest && ev.target.closest('.bar-g');
+      if (g && (!ev.relatedTarget || !ev.relatedTarget.closest || !ev.relatedTarget.closest('.bar-g'))) ocultar();
+    }});
+    document.addEventListener('focusin', function (ev) {{
+      var g = ev.target.closest && ev.target.closest('.bar-g');
+      if (!g) return;
+      var r = g.getBoundingClientRect();
+      mostrar(g, {{ clientX: r.left + r.width / 2, clientY: r.top }});
+    }});
+    document.addEventListener('focusout', ocultar);
+    window.addEventListener('scroll', ocultar, true);
+  }})();
 </script>
 </body>
 </html>
