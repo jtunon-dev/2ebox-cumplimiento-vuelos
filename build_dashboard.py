@@ -1555,9 +1555,10 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         filas.append({
             "n": r["n_guia"] if afectada else None,
             "mo": mo,
-            # mes y día de semana en que la guía quedó LISTA (pago + factura)
-            # -- el heatmap se agrupa por esto (Jorge, 2026-09-07), no por el
-            # mes/día del vuelo que le correspondía.
+            # Para los DOS heatmaps (Jorge, 2026-09-07): uno agrupado por el
+            # dia del VUELO que le correspondia (vdow, sobre `mo`), otro por
+            # el dia en que la guia quedo LISTA (hdow/hmo).
+            "vdow": date.fromisoformat(r["vuelo_esperado"][:10]).weekday(),
             "hmo": r["fl_mo"],
             "hdow": r["fl_dow"],
             "eje": clasificar_ejecutiva(conv),
@@ -1737,24 +1738,30 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         Cumplimiento por día de la semana ({titulo_bloque})
       </h3>
       <p class="sub" style="margin-bottom:8px">
-        Cada celda cruza un <b>mes</b> (fila) con el <b>día de la semana</b> (columna) en que las
-        guías quedaron listas para volar (pago + factura en Miami). El número grande es el
-        <b>% de cumplimiento</b>: de todas las guías que quedaron listas ese día de semana en ese
-        mes, qué porción alcanzó a volar a tiempo (no contó como afectada bajo el criterio
-        "{titulo_bloque}"). El número chico de abajo es el conteo exacto (a tiempo / total).
-        La última columna ("Total mes") y la última fila ("Total día") son los <b>totales
-        ponderados</b> (suma de a tiempo ÷ suma de total, no promedio de porcentajes).
-        <br><b>Ejemplo:</b> una celda en la fila <i>Ago 2026</i>, columna <i>Mié</i>, que diga
-        "<b>98%</b> · 314/320" se lee: de las 320 guías que quedaron listas un miércoles de
-        agosto, 314 (el 98%) volaron a tiempo y 6 contaron como afectadas. Verde = cumplimiento
-        alto, rojo = bajo. Se recalcula con los filtros de la izquierda.
+        Dos vistas: la de la <b>izquierda</b> agrupa por el día del <b>vuelo que le correspondía</b>
+        a la guía; la de la <b>derecha</b>, por el día en que la guía <b>quedó lista</b> (pago +
+        factura en Miami). En ambas, el número grande es el <b>% de cumplimiento</b> (qué porción
+        alcanzó a volar a tiempo, sin contar como afectada bajo el criterio "{titulo_bloque}") y el
+        chico es el conteo exacto (a tiempo / total). La última fila ("Total día") y la última
+        columna ("Total mes") son <b>totales ponderados</b> (suma de a tiempo ÷ suma de total, no
+        promedio de porcentajes). Verde = cumplimiento alto, rojo = bajo. Se recalcula con los
+        filtros de la izquierda.
       </p>
       <div class="heatmap-legend">
         <span>0% cumplimiento</span>
         <span class="heatmap-legend-bar"></span>
         <span>100% cumplimiento</span>
       </div>
-      <div id="ga-heatmap-{sfx}"></div>
+      <div class="heatmap-par">
+        <div>
+          <div class="heatmap-caption">Por día del vuelo que le correspondía</div>
+          <div id="ga-heatmap-v-{sfx}"></div>
+        </div>
+        <div>
+          <div class="heatmap-caption">Por día en que la guía quedó lista</div>
+          <div id="ga-heatmap-l-{sfx}"></div>
+        </div>
+      </div>
 
       <div class="table-wrap" style="max-height:520px">
         <table id="tabla-guias-afectadas-{sfx}" class="sortable">
@@ -1896,25 +1903,24 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
       return '<span style="color:var(--ink-faint)">—</span>';
     }}
 
-    // Interpola bad -> warn -> good (mismos hex que --bad/--warn/--good en
-    // :root) según el % de cumplimiento de la celda. Hardcodeado en vez de
-    // leer las variables CSS porque son colores de marca fijos, no cambian
-    // con el tema claro/oscuro.
+    // Interpola bad -> warn -> good segun el % de cumplimiento y despues
+    // aclara el tono mezclando ~50% hacia blanco (pedido de Jorge,
+    // 2026-09-07: colores mas claros dentro de la tabla). El texto de la
+    // celda es var(--ink-strong) fijo (navy oscuro), legible sobre pastel
+    // en ambos temas.
     function gaHeatColor(pct) {{
       var bad = [227, 32, 62], warn = [232, 162, 61], good = [52, 199, 122];
       var c0, c1, t;
       if (pct <= 50) {{ c0 = bad; c1 = warn; t = pct / 50; }}
       else {{ c0 = warn; c1 = good; t = (pct - 50) / 50; }}
-      var r = Math.round(c0[0] + (c1[0] - c0[0]) * t);
-      var g = Math.round(c0[1] + (c1[1] - c0[1]) * t);
-      var b = Math.round(c0[2] + (c1[2] - c0[2]) * t);
-      return 'rgba(' + r + ',' + g + ',' + b + ',0.88)';
+      var m = 0.5;  // mezcla hacia blanco
+      var r = Math.round((c0[0] + (c1[0] - c0[0]) * t) * (1 - m) + 255 * m);
+      var g = Math.round((c0[1] + (c1[1] - c0[1]) * t) * (1 - m) + 255 * m);
+      var b = Math.round((c0[2] + (c1[2] - c0[2]) * t) * (1 - m) + 255 * m);
+      return 'rgb(' + r + ',' + g + ',' + b + ')';
     }}
 
-    // Días de semana en el mismo orden que Python date.weekday() (0=lunes,
-    // ..., 6=domingo). El heatmap se agrupa por el MES y el DÍA DE SEMANA en
-    // que la guía quedó LISTA (campos hmo/hdow), no por el vuelo que le tocaba
-    // (Jorge, 2026-09-04 y 2026-09-07).
+    // Dias de semana en el mismo orden que Python date.weekday() (0=lunes).
     var GA_DOW_LABEL = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
     function gaCelda(o, t, etiqueta, extra) {{
       // devuelve el <td> de una celda (o = a tiempo, t = total). etiqueta va
@@ -1927,52 +1933,60 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         '<div class="hm-pct">' + pct.toFixed(0) + '%</div>' +
         '<div class="hm-n">' + o + '/' + t + '</div></td>';
     }}
-    function gaRenderHeatmap(universo, cumplidas) {{
+    // moKey/dowKey = campos por los que agrupar ('mo'/'vdow' -> por dia del
+    // vuelo que le correspondia;  'hmo'/'hdow' -> por dia en que quedo lista).
+    function gaRenderHeatmap(universo, cumplidas, moKey, dowKey, containerId) {{
       var tot = {{}}, ok = {{}};
       var totMes = {{}}, okMes = {{}}, totDow = [0,0,0,0,0,0,0], okDow = [0,0,0,0,0,0,0];
       var totAll = 0, okAll = 0;
       universo.forEach(function (r) {{
-        tot[r.hmo + '-' + r.hdow] = (tot[r.hmo + '-' + r.hdow] || 0) + 1;
-        totMes[r.hmo] = (totMes[r.hmo] || 0) + 1;
-        totDow[r.hdow] += 1; totAll += 1;
+        tot[r[moKey] + '-' + r[dowKey]] = (tot[r[moKey] + '-' + r[dowKey]] || 0) + 1;
+        totMes[r[moKey]] = (totMes[r[moKey]] || 0) + 1;
+        totDow[r[dowKey]] += 1; totAll += 1;
       }});
       cumplidas.forEach(function (r) {{
-        ok[r.hmo + '-' + r.hdow] = (ok[r.hmo + '-' + r.hdow] || 0) + 1;
-        okMes[r.hmo] = (okMes[r.hmo] || 0) + 1;
-        okDow[r.hdow] += 1; okAll += 1;
+        ok[r[moKey] + '-' + r[dowKey]] = (ok[r[moKey] + '-' + r[dowKey]] || 0) + 1;
+        okMes[r[moKey]] = (okMes[r[moKey]] || 0) + 1;
+        okDow[r[dowKey]] += 1; okAll += 1;
       }});
-      var meses = Array.from(new Set(universo.map(function (r) {{ return r.hmo; }}))).sort();
+      var meses = Array.from(new Set(universo.map(function (r) {{ return r[moKey]; }}))).sort();
+      var cont = document.getElementById(containerId);
       if (!meses.length) {{
-        document.getElementById('ga-heatmap-{sfx}').innerHTML = '<p class="empty-note">Sin guías para este filtro.</p>';
+        cont.innerHTML = '<p class="empty-note">Sin guías para este filtro.</p>';
         return;
       }}
+      // Solo se muestran las columnas (días de semana) que tienen datos --
+      // la vista "por día del vuelo" en la práctica solo trae miércoles y
+      // viernes, mostrar 5 columnas vacías no aporta (Jorge, 2026-09-07).
+      var dias = [];
+      for (var d = 0; d <= 6; d++) if (totDow[d]) dias.push(d);
       var html = '<div class="heatmap-scroll"><table class="heatmap-tabla"><thead><tr><th></th>';
-      for (var dow = 0; dow <= 6; dow++) html += '<th>' + GA_DOW_LABEL[dow] + '</th>';
+      dias.forEach(function (dow) {{ html += '<th>' + GA_DOW_LABEL[dow] + '</th>'; }});
       html += '<th class="heatmap-tot">Total mes</th></tr></thead><tbody>';
       meses.forEach(function (mo) {{
         html += '<tr><th class="heatmap-mes">' + (GA_MESES_LABEL[mo] || mo) + '</th>';
-        for (var dow = 0; dow <= 6; dow++) {{
+        dias.forEach(function (dow) {{
           var k = mo + '-' + dow;
           html += gaCelda(ok[k] || 0, tot[k] || 0, (GA_MESES_LABEL[mo] || mo) + ' · ' + GA_DOW_LABEL[dow]);
-        }}
+        }});
         html += gaCelda(okMes[mo] || 0, totMes[mo] || 0, (GA_MESES_LABEL[mo] || mo) + ' · total del mes', 'heatmap-tot');
         html += '</tr>';
       }});
       // Fila de totales por día de semana (ponderado: suma a tiempo / suma total)
       html += '<tr><th class="heatmap-mes heatmap-tot">Total día</th>';
-      for (var dow = 0; dow <= 6; dow++) {{
+      dias.forEach(function (dow) {{
         html += gaCelda(okDow[dow], totDow[dow], GA_DOW_LABEL[dow] + ' · total de todos los meses', 'heatmap-tot');
-      }}
+      }});
       html += gaCelda(okAll, totAll, 'Total general', 'heatmap-tot heatmap-tot-all');
       html += '</tr></tbody></table></div>';
-      var el = document.getElementById('ga-heatmap-{sfx}');
-      el.innerHTML = html;
+      cont.innerHTML = html;
     }}
 
     function gaRender() {{
       var res = gaFiltrar();
       var universo = res.universo, afectadas = res.afectadas;
-      gaRenderHeatmap(universo, res.cumplidas);
+      gaRenderHeatmap(universo, res.cumplidas, 'mo', 'vdow', 'ga-heatmap-v-{sfx}');
+      gaRenderHeatmap(universo, res.cumplidas, 'hmo', 'hdow', 'ga-heatmap-l-{sfx}');
       var col = GA_COLS[gaSort.col];
       afectadas.sort(function (a, b) {{
         var va = a[col], vb = b[col];
@@ -2439,32 +2453,39 @@ HTML = f"""<!DOCTYPE html>
     .ed-arrow {{ transform: rotate(90deg); }}
   }}
   /* Heatmap "Cumplimiento por día de la semana" dentro de Guías afectadas
-     (Jorge, 2026-09-03..09-07): filas = mes en que la guía quedó lista,
-     columnas = día de semana en que quedó lista. Número y color de cada
-     celda = % que subió a tiempo bajo el criterio activo. Última fila /
-     última columna = totales ponderados (suma a tiempo / suma total). El
-     contenedor se ajusta al ancho real de la tabla. Se recalcula en JS
-     junto con el resto de la pestaña -- ver gaRenderHeatmap(). */
+     (Jorge, 2026-09-03..09-07): DOS tablas lado a lado -- izquierda agrupada
+     por el día del vuelo que le correspondía a la guía, derecha por el día
+     en que quedó lista. Número y color de cada celda = % que subió a tiempo
+     bajo el criterio activo (color pastel -- mezcla 50% hacia blanco).
+     Última fila / última columna = totales ponderados, resaltados. Se
+     recalcula en JS -- ver gaRenderHeatmap(). */
   .heatmap-legend {{ display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--ink-faint); margin-bottom: 10px; }}
   .heatmap-legend-bar {{
     display: inline-block; width: 140px; height: 8px; border-radius: 4px;
     background: linear-gradient(to right, #E3203E, #E8A23D, #34C77A);
   }}
+  .heatmap-par {{ display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; margin-bottom: 24px; }}
+  .heatmap-caption {{ font-size: 11px; font-weight: 700; color: var(--ink); margin-bottom: 6px; letter-spacing: .02em; }}
   .heatmap-scroll {{
     overflow-x: auto; border: 1px solid var(--line); border-radius: 14px;
-    margin-bottom: 24px; width: -moz-fit-content; width: fit-content; max-width: 100%;
+    width: -moz-fit-content; width: fit-content; max-width: 100%;
   }}
   .heatmap-tabla {{ border-collapse: collapse; font-size: 12px; }}
   .heatmap-tabla th {{ font-weight: 600; color: var(--ink-faint); padding: 6px 8px; text-align: center; position: sticky; top: 0; background: var(--surface); }}
-  .heatmap-tabla th.heatmap-mes {{ text-align: right; position: sticky; left: 0; z-index: 1; padding-right: 12px; background: var(--surface); min-width: 84px; }}
-  .heatmap-cell {{ width: 74px; height: 46px; text-align: center; color: #0D1721; border: 2px solid var(--bg); line-height: 1.15; }}
-  .heatmap-cell .hm-pct {{ font-weight: 700; font-size: 13px; }}
-  .heatmap-cell .hm-n {{ font-size: 9.5px; opacity: 0.72; }}
+  .heatmap-tabla th.heatmap-mes {{ text-align: right; position: sticky; left: 0; z-index: 1; padding-right: 10px; background: var(--surface); min-width: 76px; }}
+  .heatmap-cell {{ width: 62px; height: 42px; text-align: center; color: #0D1721; border: 2px solid var(--bg); line-height: 1.12; }}
+  .heatmap-cell .hm-pct {{ font-weight: 700; font-size: 12.5px; }}
+  .heatmap-cell .hm-n {{ font-size: 9px; opacity: 0.72; }}
   .heatmap-cell.vacia {{ background: var(--surface-2); border-color: var(--line); }}
-  .heatmap-tabla th.heatmap-tot {{ color: var(--ink); font-weight: 700; }}
-  .heatmap-cell.heatmap-tot {{ border-color: var(--ink-faint); }}
-  .heatmap-cell.heatmap-tot-all {{ outline: 2px solid var(--ink); outline-offset: -2px; }}
-  .heatmap-tabla tbody tr:last-child .heatmap-cell {{ border-top-color: var(--ink-faint); }}
+  /* Totales bien marcados: header en tinta fuerte, celdas con borde grueso
+     oscuro y separadores; total general con doble marco. */
+  .heatmap-tabla th.heatmap-tot {{ color: var(--ink); font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }}
+  .heatmap-tabla th.heatmap-mes.heatmap-tot {{ font-size: 11px; }}
+  .heatmap-cell.heatmap-tot {{ border-color: var(--ink); }}
+  .heatmap-cell.heatmap-tot .hm-pct {{ font-size: 14px; }}
+  .heatmap-tabla tr > *:last-child {{ border-left: 3px solid var(--ink); }}
+  .heatmap-tabla tbody tr:last-child > * {{ border-top: 3px solid var(--ink); }}
+  .heatmap-cell.heatmap-tot-all {{ outline: 3px solid var(--ink); outline-offset: -3px; }}
   .kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 26px; }}
   .kpi {{ background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }}
   .kpi .v {{ font-family: 'Russo One', system-ui, sans-serif; font-size: 22px; }}
