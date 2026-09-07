@@ -27,6 +27,12 @@ MESES_ES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct"
 # Resumen y en Guias afectadas -- ver build_tolerancia().
 TOLERANCIA_MAX_PCT = 5.0
 
+# Tope operativo de carga por vuelo (Jorge, 2026-09-07): la aerolinea acepta
+# ~400 kg por vuelo, con holgura a criterio del fiscalizador (algunos vuelos
+# van bajo 400, otros sobre). Se usa en la 2da tabla de "Capacidad de
+# Vuelos", que mide contra este limite (no contra la demanda sin tope).
+KG_MAX_POR_VUELO = 400
+
 # Codigos de convenio por ejecutiva (confirmados con Jorge, 2026-09-01 --
 # mismo mapeo que el subproyecto de comisiones, ver docs/SYSTEM_MAP.md T-0004:
 # Kathy = KC2EBOX + CPLAZA2EBOX (su canal de referidos mas grande) + DiamanteK;
@@ -174,11 +180,13 @@ def barra_svg(items, label_fn, width=980, height=260, bar_gap=6):
     return "".join(svg)
 
 
-def _fila_detalle_cols(v, es_total=False):
+def _fila_detalle_cols(v, es_total=False, color_fn=color_por_pct):
     """Las 7 celdas de datos comunes a todas las tablas de detalle:
     guías evaluadas · guías afectadas · % · kilos totales · kilos afectados ·
     % kilos · clientes. `v` puede venir de por_mes/por_semana (trae 'pct' y
-    'pct_kilos' ya calculados) o del bloque total (se calculan acá)."""
+    'pct_kilos' ya calculados) o del bloque total (se calculan acá).
+    `color_fn` define la escala de color de los dos % (por defecto la general
+    15/40; la tabla del Resumen usa color_tolerancia, ligada a 5%/10%)."""
     pct = v["pct"] if "pct" in v else (
         round(v["incidentes"] / v["evaluables"] * 100, 1) if v.get("evaluables") else 0
     )
@@ -189,15 +197,15 @@ def _fila_detalle_cols(v, es_total=False):
     return (
         f"<td data-v='{v['evaluables']}'>{fmt_n(v['evaluables'])}</td>"
         f"<td data-v='{v['incidentes']}'>{fmt_n(v['incidentes'])}</td>"
-        f"<td data-v='{pct}' style='color:{color_por_pct(pct)};{peso}'>{fmt_pct(pct)}</td>"
+        f"<td data-v='{pct}' style='color:{color_fn(pct)};{peso}'>{fmt_pct(pct)}</td>"
         f"<td data-v='{v['kilos_evaluables']}'>{fmt_kg(v['kilos_evaluables'])}</td>"
         f"<td data-v='{v['kilos']}'>{fmt_kg(v['kilos'])}</td>"
-        f"<td data-v='{pct_kg}' style='color:{color_por_pct(pct_kg)};{peso}'>{fmt_pct(pct_kg)}</td>"
+        f"<td data-v='{pct_kg}' style='color:{color_fn(pct_kg)};{peso}'>{fmt_pct(pct_kg)}</td>"
         f"<td data-v='{v['clientes']}'>{fmt_n(v['clientes'])}</td>"
     )
 
 
-def tabla_html(items, label_fn, semanal, totales=None):
+def tabla_html(items, label_fn, semanal, totales=None, color_fn=color_por_pct):
     rows = []
     for key, v in items:
         celda_semana = (
@@ -207,7 +215,7 @@ def tabla_html(items, label_fn, semanal, totales=None):
         rows.append(
             f"<tr>{celda_semana}"
             f"<td data-v='{key}'>{label_fn(key)}</td>"
-            + _fila_detalle_cols(v) + "</tr>"
+            + _fila_detalle_cols(v, color_fn=color_fn) + "</tr>"
         )
     if totales:
         t = {
@@ -223,7 +231,7 @@ def tabla_html(items, label_fn, semanal, totales=None):
             f"<td class='tot-lbl' data-v='2099'>TOTAL 2026</td>"
         )
         rows.append(
-            f"<tr class='fila-total'>{label_cell}" + _fila_detalle_cols(t, es_total=True) + "</tr>"
+            f"<tr class='fila-total'>{label_cell}" + _fila_detalle_cols(t, es_total=True, color_fn=color_fn) + "</tr>"
         )
     return "\n".join(rows)
 
@@ -691,7 +699,8 @@ def build_resumen_ejecutivo():
                 items = sorted(blk["por_mes"].items())
                 lbl_fn = mes_label
             tid = f"tabla-resumen-{cid}-{per}"
-            body = tabla_html(items, lbl_fn, semanal=semanal_flag, totales=blk)
+            body = tabla_html(items, lbl_fn, semanal=semanal_flag, totales=blk,
+                              color_fn=color_tolerancia)
             activo = " active" if (cid == "estricto" and semanal_flag) else ""
             res_views.append(
                 f'<div id="view-resumen-{cid}-{per}" class="view{activo}">'
@@ -743,7 +752,12 @@ def build_resumen_ejecutivo():
     <h2>Semana a semana / mes a mes</h2>
     <p class="sub" style="margin-bottom:12px">
       Guías afectadas contadas en la semana/mes del vuelo que les correspondía. Elige el
-      criterio: "% kilos afect." = kilos afectados sobre los kilos totales de ese período.
+      criterio abajo. "% kilos afect." = kilos afectados sobre los kilos totales de ese
+      período. Los colores de los % usan la misma escala que la tolerancia acordada:
+      <span style="color:var(--good)">verde</span> bajo {fmt_pct(TOLERANCIA_MAX_PCT * 0.6)},
+      <span style="color:var(--warn)">ámbar</span> cerca del {fmt_pct(TOLERANCIA_MAX_PCT)},
+      <span style="color:var(--bad)">rojo</span> sobre {fmt_pct(TOLERANCIA_MAX_PCT)},
+      <span style="color:var(--bad-dark)">rojo oscuro</span> sobre {fmt_pct(TOLERANCIA_MAX_PCT * 2)}.
     </p>
     <div class="toggle" id="toggle-resumen-crit">
       {res_crit_btns_html}
@@ -800,8 +814,15 @@ def build_capacidad_vuelos():
     real que impone la aerolínea ese vuelo puntual. "Podría" es la DEMANDA
     = lo que voló + las guías evaluables que ya estaban listas y no
     alcanzaron a subir (el excedente). Por construcción podría >= ingreso
-    siempre. `pct_capacidad = podria / ingreso * 100` -- 100% = el vuelo se
-    llevó toda la demanda lista; más de 100% = quedó demanda esperando."""
+    siempre. `pct_capacidad = kg_podria / kg_ingreso * 100` (en KILOS desde
+    2026-09-07) -- 100% = el vuelo se llevó todos los kilos listos; más de
+    100% = quedó carga esperando.
+
+    Además (2026-09-07) hay una segunda tabla con el criterio "tope 400 kg
+    por vuelo": la aerolínea acepta ~400 kg por vuelo, con holgura a
+    criterio del fiscalizador (algunos vuelos van bajo, otros sobre). Esa
+    tabla NO reemplaza a la de arriba (demanda sin tope) -- la complementa
+    con el límite operativo real."""
     cap = data.get("capacidad_por_vuelo", [])
     # capacidad_por_semana viene de una simulacion propia a nivel semanal
     # (calcular_capacidad_semanal en el extractor) -- NO es un rollup del
@@ -811,15 +832,18 @@ def build_capacidad_vuelos():
     # (justo antes del ultimo vuelo de esa semana).
     por_semana = {c["semana"]: c for c in data.get("capacidad_por_semana", [])}
     por_mes = {c["mes"]: c for c in data.get("capacidad_por_mes", [])}
+    # "% sobre capacidad" se mide en KILOS (pedido de Jorge, 2026-09-07):
+    # kg_podria / kg_ingreso -- el excedente relevante es el de carga, no el
+    # conteo de guías. 100% = el vuelo se llevó todos los kilos listos.
     for b in list(por_semana.values()) + list(por_mes.values()):
         b["excedente"] = max(0, b["n_podria"] - b["n_ingreso"])
         b["kg_excedente"] = round(max(0, b["kg_podria"] - b["kg_ingreso"]), 1)
-        b["pct_capacidad"] = round(b["n_podria"] / b["n_ingreso"] * 100, 1) if b["n_ingreso"] else 0
+        b["pct_capacidad"] = round(b["kg_podria"] / b["kg_ingreso"] * 100, 1) if b["kg_ingreso"] else 0
 
     for c in cap:
         c["excedente"] = max(0, c["n_podria"] - c["n_ingreso"])
         c["kg_excedente"] = round(max(0, c["kg_podria"] - c["kg_ingreso"]), 1)
-        c["pct_capacidad"] = round(c["n_podria"] / c["n_ingreso"] * 100, 1) if c["n_ingreso"] else 0
+        c["pct_capacidad"] = round(c["kg_podria"] / c["kg_ingreso"] * 100, 1) if c["kg_ingreso"] else 0
 
     vuelo_items = [(c["ts"], c) for c in cap]
     semana_items = sorted(por_semana.items())
@@ -884,10 +908,97 @@ def build_capacidad_vuelos():
     tabla_semana = "\n".join(fila_semana(wk, b) for wk, b in semana_items)
     tabla_mes = "\n".join(fila_mes(mo, b) for mo, b in mes_items)
 
+    # --- 2da tabla de capacidad: contra el tope operativo de 400 kg/vuelo
+    # (Jorge, 2026-09-07). NO reemplaza a la de arriba (demanda sin tope):
+    # la complementa con el limite real que impone la aerolinea. "kilos
+    # maximo" = n_vuelos x 400. "dif. con maximo" = lo ingresado menos ese
+    # tope nominal (+ = se pasaron del nominal, con la holgura del
+    # fiscalizador; - = quedo cupo). "dif. con lo que podria" = carga lista
+    # que no alcanzo a subir.
+    def _cap400(b, n_vuelos):
+        kg_max = n_vuelos * KG_MAX_POR_VUELO
+        kg_ing = b["kg_ingreso"]
+        dif_max = round(kg_ing - kg_max, 1)
+        dif_pod = round(max(0, b["kg_podria"] - kg_ing), 1)
+        return {
+            "kg_max": kg_max,
+            "dif_max": dif_max,
+            "dif_pod": dif_pod,
+            "pct_dif_max": round(dif_max / kg_max * 100, 1) if kg_max else 0,
+            "pct_dif_pod": round(dif_pod / kg_ing * 100, 1) if kg_ing else 0,
+        }
+
+    def color_dif_max(pct):
+        if pct > 15:
+            return "var(--bad)"
+        if pct > 0:
+            return "var(--warn)"
+        return "var(--good)"
+
+    def _signo_kg(val):
+        return ("+" if val > 0 else "") + fmt_kg(val)
+
+    def _signo_pct(val):
+        return ("+" if val > 0 else "") + fmt_pct(val)
+
+    def fila400_semana(wk, b):
+        m = _cap400(b, b["n_vuelos"])
+        return (
+            f"<tr data-fecha='{wk}'><td data-v='{date.fromisoformat(wk).isocalendar()[1]}'>{semana_numero(wk)}</td>"
+            f"<td data-v='{wk}'>{semana_label(wk)}</td>"
+            f"<td data-v='{b['n_vuelos']}'>{fmt_n(b['n_vuelos'])}</td>"
+            f"<td data-v='{b['n_ingreso']}'>{fmt_n(b['n_ingreso'])}</td>"
+            f"<td data-v='{b['kg_ingreso']}'>{fmt_kg(b['kg_ingreso'])}</td>"
+            f"<td data-v='{m['kg_max']}'>{fmt_kg(m['kg_max'])}</td>"
+            f"<td data-v='{b['kg_podria']}'>{fmt_kg(b['kg_podria'])}</td>"
+            f"<td data-v='{m['dif_max']}' style='color:{color_dif_max(m['pct_dif_max'])};font-weight:700'>{_signo_kg(m['dif_max'])}</td>"
+            f"<td data-v='{m['dif_pod']}'>{fmt_kg(m['dif_pod'])}</td>"
+            f"<td data-v='{m['pct_dif_max']}' style='color:{color_dif_max(m['pct_dif_max'])};font-weight:700'>{_signo_pct(m['pct_dif_max'])}</td>"
+            f"<td data-v='{m['pct_dif_pod']}' style='color:{color_por_pct(m['pct_dif_pod'])};font-weight:700'>{fmt_pct(m['pct_dif_pod'])}</td></tr>"
+        )
+
+    def fila400_mes(mo, b):
+        m = _cap400(b, b["n_vuelos"])
+        return (
+            f"<tr data-fecha='{mo}-01'><td data-v='{mo}'>{mes_label(mo)}</td>"
+            f"<td data-v='{b['n_vuelos']}'>{fmt_n(b['n_vuelos'])}</td>"
+            f"<td data-v='{b['n_ingreso']}'>{fmt_n(b['n_ingreso'])}</td>"
+            f"<td data-v='{b['kg_ingreso']}'>{fmt_kg(b['kg_ingreso'])}</td>"
+            f"<td data-v='{m['kg_max']}'>{fmt_kg(m['kg_max'])}</td>"
+            f"<td data-v='{b['kg_podria']}'>{fmt_kg(b['kg_podria'])}</td>"
+            f"<td data-v='{m['dif_max']}' style='color:{color_dif_max(m['pct_dif_max'])};font-weight:700'>{_signo_kg(m['dif_max'])}</td>"
+            f"<td data-v='{m['dif_pod']}'>{fmt_kg(m['dif_pod'])}</td>"
+            f"<td data-v='{m['pct_dif_max']}' style='color:{color_dif_max(m['pct_dif_max'])};font-weight:700'>{_signo_pct(m['pct_dif_max'])}</td>"
+            f"<td data-v='{m['pct_dif_pod']}' style='color:{color_por_pct(m['pct_dif_pod'])};font-weight:700'>{fmt_pct(m['pct_dif_pod'])}</td></tr>"
+        )
+
+    def fila400_vuelo(ts, c):
+        fecha_txt = ts[:10]
+        awb_txt = c.get("awb") or "s/d"
+        aerolinea = c.get("aerolinea") or ""
+        awb_html = html.escape(awb_txt) + (f" <span style='color:var(--ink-faint)'>({html.escape(aerolinea)})</span>" if aerolinea else "")
+        m = _cap400(c, 1)
+        return (
+            f"<tr data-fecha='{fecha_txt}'><td data-v='{html.escape(awb_txt)}'>{awb_html}</td>"
+            f"<td data-v='{ts}'>{fecha_txt}</td>"
+            f"<td data-v='{c['n_ingreso']}'>{fmt_n(c['n_ingreso'])}</td>"
+            f"<td data-v='{c['kg_ingreso']}'>{fmt_kg(c['kg_ingreso'])}</td>"
+            f"<td data-v='{m['kg_max']}'>{fmt_kg(m['kg_max'])}</td>"
+            f"<td data-v='{c['kg_podria']}'>{fmt_kg(c['kg_podria'])}</td>"
+            f"<td data-v='{m['dif_max']}' style='color:{color_dif_max(m['pct_dif_max'])};font-weight:700'>{_signo_kg(m['dif_max'])}</td>"
+            f"<td data-v='{m['dif_pod']}'>{fmt_kg(m['dif_pod'])}</td>"
+            f"<td data-v='{m['pct_dif_max']}' style='color:{color_dif_max(m['pct_dif_max'])};font-weight:700'>{_signo_pct(m['pct_dif_max'])}</td>"
+            f"<td data-v='{m['pct_dif_pod']}' style='color:{color_por_pct(m['pct_dif_pod'])};font-weight:700'>{fmt_pct(m['pct_dif_pod'])}</td></tr>"
+        )
+
+    tabla400_vuelo = "\n".join(fila400_vuelo(ts, c) for ts, c in vuelo_items)
+    tabla400_semana = "\n".join(fila400_semana(wk, b) for wk, b in semana_items)
+    tabla400_mes = "\n".join(fila400_mes(mo, b) for mo, b in mes_items)
+
     total_ingreso = sum(c["n_ingreso"] for c in cap)
     total_kg_ingreso = sum(c["kg_ingreso"] for c in cap)
     total_excedente = sum(c["excedente"] for c in cap)
-    pct_capacidad_global = round(sum(b["n_podria"] for b in por_semana.values()) / sum(b["n_ingreso"] for b in por_semana.values()) * 100, 1) if por_semana else 0
+    pct_capacidad_global = round(sum(b["kg_podria"] for b in por_semana.values()) / sum(b["kg_ingreso"] for b in por_semana.values()) * 100, 1) if por_semana else 0
     peor_vuelo = max(cap, key=lambda c: c["pct_capacidad"]) if cap else None
     kg_prom_vuelo = round(total_kg_ingreso / len(cap)) if cap else 0
     fecha_min = min((c["ts"][:10] for c in cap), default="")
@@ -928,7 +1039,7 @@ def build_capacidad_vuelos():
     <div class="kpi"><div class="v" id="cap-kpi-ingreso">{fmt_n(total_ingreso)}</div><div class="l">Total guías ingresadas</div></div>
     <div class="kpi"><div class="v" id="cap-kpi-kgprom">{fmt_kg(kg_prom_vuelo)}</div><div class="l">Promedio de kilos por vuelo</div></div>
     <div class="kpi bad"><div class="v" id="cap-kpi-excedente">{fmt_n(total_excedente)}</div><div class="l">Guías-vuelo de excedente acumulado (suma por vuelo)</div></div>
-    <div class="kpi"><div class="v" id="cap-kpi-peor">{peor_vuelo['ts'][:10] if peor_vuelo else 's/d'}</div><div class="l" id="cap-kpi-peor-l">Vuelo con mayor excedente ({fmt_pct(peor_vuelo['pct_capacidad']) if peor_vuelo else 's/d'} de su capacidad)</div></div>
+    <div class="kpi"><div class="v" id="cap-kpi-peor">{peor_vuelo['ts'][:10] if peor_vuelo else 's/d'}</div><div class="l" id="cap-kpi-peor-l">Vuelo con mayor excedente ({fmt_pct(peor_vuelo['pct_capacidad']) if peor_vuelo else 's/d'} de su capacidad en kilos)</div></div>
   </div>
 
   <section>
@@ -968,7 +1079,7 @@ def build_capacidad_vuelos():
           <th onclick="ordenarTabla('tabla-capacidad-semanal',6,'num')">Kilos podrían</th>
           <th onclick="ordenarTabla('tabla-capacidad-semanal',7,'num')">Excedente (kg)</th>
           <th onclick="ordenarTabla('tabla-capacidad-semanal',8,'num')">Excedente (guías)</th>
-          <th onclick="ordenarTabla('tabla-capacidad-semanal',9,'num')">% sobre capacidad</th>
+          <th onclick="ordenarTabla('tabla-capacidad-semanal',9,'num')">% sobre capacidad (kg)</th>
         </tr></thead>
         <tbody>{tabla_semana}</tbody></table>
       </div>
@@ -982,7 +1093,7 @@ def build_capacidad_vuelos():
           <th onclick="ordenarTabla('tabla-capacidad-mes',5,'num')">Kilos podrían</th>
           <th onclick="ordenarTabla('tabla-capacidad-mes',6,'num')">Excedente (kg)</th>
           <th onclick="ordenarTabla('tabla-capacidad-mes',7,'num')">Excedente (guías)</th>
-          <th onclick="ordenarTabla('tabla-capacidad-mes',8,'num')">% sobre capacidad</th>
+          <th onclick="ordenarTabla('tabla-capacidad-mes',8,'num')">% sobre capacidad (kg)</th>
         </tr></thead>
         <tbody>{tabla_mes}</tbody></table>
       </div>
@@ -996,9 +1107,76 @@ def build_capacidad_vuelos():
           <th onclick="ordenarTabla('tabla-capacidad-vuelo',5,'num')">Kilos podrían</th>
           <th onclick="ordenarTabla('tabla-capacidad-vuelo',6,'num')">Excedente (kg)</th>
           <th onclick="ordenarTabla('tabla-capacidad-vuelo',7,'num')">Excedente (guías)</th>
-          <th onclick="ordenarTabla('tabla-capacidad-vuelo',8,'num')">% sobre capacidad</th>
+          <th onclick="ordenarTabla('tabla-capacidad-vuelo',8,'num')">% sobre capacidad (kg)</th>
         </tr></thead>
         <tbody>{tabla_vuelo}</tbody></table>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Con tope operativo de {fmt_n(KG_MAX_POR_VUELO)} kg por vuelo</h2>
+    <p class="sub" style="margin-bottom:12px">
+      La sección de arriba mide contra la <b>demanda sin tope</b> (todo lo que llegó y podría
+      haberse subido). Esta lo mira contra el <b>límite real de la aerolínea</b>: un supuesto de
+      <b>{fmt_n(KG_MAX_POR_VUELO)} kg por vuelo</b>, con holgura a criterio del fiscalizador —
+      hay vuelos que van bajo {fmt_n(KG_MAX_POR_VUELO)} kg y otros por encima.
+      <br>"Kilos máximo" = n.º de vuelos × {fmt_n(KG_MAX_POR_VUELO)} kg.
+      "Dif. con máximo" = kilos ingresados − kilos máximo (<span style="color:var(--warn)">+
+      </span>= se pasaron del nominal; <span style="color:var(--good)">−</span> = quedó cupo).
+      "Dif. con demanda" = kilos listos que no alcanzaron a subir.
+    </p>
+    <div class="toggle">
+      <button id="btn-cap400-semanal" class="active" onclick="verTablaCap400('semanal')">Semanal</button>
+      <button id="btn-cap400-mensual" onclick="verTablaCap400('mensual')">Mensual</button>
+      <button id="btn-cap400-porvuelo" onclick="verTablaCap400('porvuelo')">Por vuelo</button>
+    </div>
+    <div class="table-wrap">
+      <div id="view-cap400-semanal" class="view active">
+        <table id="tabla-cap400-semanal" class="sortable"><thead><tr>
+          <th onclick="ordenarTabla('tabla-cap400-semanal',0,'num')">N° Semana</th>
+          <th onclick="ordenarTabla('tabla-cap400-semanal',1,'str')">Semana (lunes)</th>
+          <th onclick="ordenarTabla('tabla-cap400-semanal',2,'num')">Vuelos</th>
+          <th onclick="ordenarTabla('tabla-cap400-semanal',3,'num')">Guías</th>
+          <th onclick="ordenarTabla('tabla-cap400-semanal',4,'num')">Kilos ingresados</th>
+          <th onclick="ordenarTabla('tabla-cap400-semanal',5,'num')">Kilos máximo</th>
+          <th onclick="ordenarTabla('tabla-cap400-semanal',6,'num')">Kilos podrían</th>
+          <th onclick="ordenarTabla('tabla-cap400-semanal',7,'num')">Dif. con máximo (kg)</th>
+          <th onclick="ordenarTabla('tabla-cap400-semanal',8,'num')">Dif. con demanda (kg)</th>
+          <th onclick="ordenarTabla('tabla-cap400-semanal',9,'num')">% dif. máximo</th>
+          <th onclick="ordenarTabla('tabla-cap400-semanal',10,'num')">% dif. demanda</th>
+        </tr></thead>
+        <tbody>{tabla400_semana}</tbody></table>
+      </div>
+      <div id="view-cap400-mensual" class="view">
+        <table id="tabla-cap400-mes" class="sortable"><thead><tr>
+          <th onclick="ordenarTabla('tabla-cap400-mes',0,'str')">Mes</th>
+          <th onclick="ordenarTabla('tabla-cap400-mes',1,'num')">Vuelos</th>
+          <th onclick="ordenarTabla('tabla-cap400-mes',2,'num')">Guías</th>
+          <th onclick="ordenarTabla('tabla-cap400-mes',3,'num')">Kilos ingresados</th>
+          <th onclick="ordenarTabla('tabla-cap400-mes',4,'num')">Kilos máximo</th>
+          <th onclick="ordenarTabla('tabla-cap400-mes',5,'num')">Kilos podrían</th>
+          <th onclick="ordenarTabla('tabla-cap400-mes',6,'num')">Dif. con máximo (kg)</th>
+          <th onclick="ordenarTabla('tabla-cap400-mes',7,'num')">Dif. con demanda (kg)</th>
+          <th onclick="ordenarTabla('tabla-cap400-mes',8,'num')">% dif. máximo</th>
+          <th onclick="ordenarTabla('tabla-cap400-mes',9,'num')">% dif. demanda</th>
+        </tr></thead>
+        <tbody>{tabla400_mes}</tbody></table>
+      </div>
+      <div id="view-cap400-porvuelo" class="view">
+        <table id="tabla-cap400-vuelo" class="sortable"><thead><tr>
+          <th onclick="ordenarTabla('tabla-cap400-vuelo',0,'str')">N° vuelo / AWB</th>
+          <th onclick="ordenarTabla('tabla-cap400-vuelo',1,'str')">Fecha vuelo</th>
+          <th onclick="ordenarTabla('tabla-cap400-vuelo',2,'num')">Guías</th>
+          <th onclick="ordenarTabla('tabla-cap400-vuelo',3,'num')">Kilos ingresados</th>
+          <th onclick="ordenarTabla('tabla-cap400-vuelo',4,'num')">Kilos máximo</th>
+          <th onclick="ordenarTabla('tabla-cap400-vuelo',5,'num')">Kilos podrían</th>
+          <th onclick="ordenarTabla('tabla-cap400-vuelo',6,'num')">Dif. con máximo (kg)</th>
+          <th onclick="ordenarTabla('tabla-cap400-vuelo',7,'num')">Dif. con demanda (kg)</th>
+          <th onclick="ordenarTabla('tabla-cap400-vuelo',8,'num')">% dif. máximo</th>
+          <th onclick="ordenarTabla('tabla-cap400-vuelo',9,'num')">% dif. demanda</th>
+        </tr></thead>
+        <tbody>{tabla400_vuelo}</tbody></table>
       </div>
     </div>
   </section>
@@ -1022,7 +1200,8 @@ def build_capacidad_vuelos():
       window.capFiltrarFechas = function () {{
         var desde = document.getElementById('cap-fecha-desde').value;
         var hasta = document.getElementById('cap-fecha-hasta').value;
-        ['tabla-capacidad-vuelo', 'tabla-capacidad-semanal', 'tabla-capacidad-mes'].forEach(function (tid) {{
+        ['tabla-capacidad-vuelo', 'tabla-capacidad-semanal', 'tabla-capacidad-mes',
+         'tabla-cap400-vuelo', 'tabla-cap400-semanal', 'tabla-cap400-mes'].forEach(function (tid) {{
           var tabla = document.getElementById(tid);
           if (!tabla) return;
           Array.prototype.slice.call(tabla.querySelectorAll('tbody tr')).forEach(function (tr) {{
@@ -1062,7 +1241,7 @@ def build_capacidad_vuelos():
         document.getElementById('cap-kpi-excedente').textContent = totalExcedente.toLocaleString('es-CL');
         document.getElementById('cap-kpi-peor').textContent = peor ? peor.fecha.slice(0, 10) : 's/d';
         document.getElementById('cap-kpi-peor-l').textContent =
-          'Vuelo con mayor excedente (' + (peor ? peor.pct.toFixed(1) : '0') + '% de su capacidad)';
+          'Vuelo con mayor excedente (' + (peor ? peor.pct.toFixed(1) : '0') + '% de su capacidad en kilos)';
       }}
     }})();
   </script>
@@ -2957,6 +3136,12 @@ HTML = f"""<!DOCTYPE html>
     ['semanal', 'mensual', 'porvuelo'].forEach(function (s) {{
       document.getElementById('view-capacidad-tabla-' + s).classList.toggle('active', s === v);
       document.getElementById('btn-capacidad-tabla-' + s).classList.toggle('active', s === v);
+    }});
+  }}
+  function verTablaCap400(v) {{
+    ['semanal', 'mensual', 'porvuelo'].forEach(function (s) {{
+      document.getElementById('view-cap400-' + s).classList.toggle('active', s === v);
+      document.getElementById('btn-cap400-' + s).classList.toggle('active', s === v);
     }});
   }}
 
