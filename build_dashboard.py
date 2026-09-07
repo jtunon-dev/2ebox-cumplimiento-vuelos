@@ -658,8 +658,49 @@ def build_resumen_ejecutivo():
     pct_est = round(est["total_incidentes"] / est["total_evaluables"] * 100, 1) if est["total_evaluables"] else 0
     pct_sem = round(sem["total_incidentes"] / sem["total_evaluables"] * 100, 1) if sem["total_evaluables"] else 0
 
-    tabla_res_semanal = tabla_html(sorted(b["por_semana"].items()), semana_label, semanal=True, totales=b)
-    tabla_res_mensual = tabla_html(sorted(b["por_mes"].items()), mes_label, semanal=False, totales=b)
+    # "Semana a semana / mes a mes": la tabla es filtrable por criterio
+    # (pedido de Jorge, 2026-09-07). La regla permisiva "+1 vuelo" deja de
+    # ser la norma -- el default es "regular" (vuelo exacto, según el
+    # horario de corte). Se pre-renderizan las 6 vistas (3 criterios x
+    # semanal/mensual) y un toggle las alterna.
+    criterios_resumen = [
+        ("estricto", "Regular (vuelo exacto)", data["estricto"],
+         "Criterio regular: cuenta como afectada cualquier guía que no subió exactamente "
+         "al vuelo que le correspondía según el horario de corte, aunque haya alcanzado el "
+         "siguiente."),
+        ("semana", "Misma semana", data["semana"],
+         "Criterio misma semana: punto intermedio — cuenta solo si la guía voló en una "
+         "semana calendario posterior a la que le correspondía."),
+        ("unvuelo", "Permisivo +1 vuelo", data["un_vuelo"],
+         "Criterio permisivo: cuenta solo a las guías que no alcanzaron ni su vuelo ni el "
+         "inmediatamente siguiente, o que todavía no han volado."),
+    ]
+    res_views = []
+    res_crit_btns = []
+    for cid, lbl, blk, desc in criterios_resumen:
+        activo_btn = ' class="active"' if cid == "estricto" else ""
+        res_crit_btns.append(
+            f'<button data-crit="{cid}" data-desc="{html.escape(desc)}"{activo_btn} '
+            f'onclick="verCriterioResumen(\'{cid}\')">{lbl}</button>'
+        )
+        for per, semanal_flag in (("semanal", True), ("mensual", False)):
+            if semanal_flag:
+                items = sorted(blk["por_semana"].items())
+                lbl_fn = semana_label
+            else:
+                items = sorted(blk["por_mes"].items())
+                lbl_fn = mes_label
+            tid = f"tabla-resumen-{cid}-{per}"
+            body = tabla_html(items, lbl_fn, semanal=semanal_flag, totales=blk)
+            activo = " active" if (cid == "estricto" and semanal_flag) else ""
+            res_views.append(
+                f'<div id="view-resumen-{cid}-{per}" class="view{activo}">'
+                f'<table id="{tid}" class="sortable">{thead_detalle(tid, semanal_flag)}'
+                f'<tbody>{body}</tbody></table></div>'
+            )
+    res_views_html = "\n".join(res_views)
+    res_crit_btns_html = "\n".join(res_crit_btns)
+    res_crit_desc_default = criterios_resumen[0][3]
 
     return f"""
   <p class="sub">
@@ -701,21 +742,19 @@ def build_resumen_ejecutivo():
   <section>
     <h2>Semana a semana / mes a mes</h2>
     <p class="sub" style="margin-bottom:12px">
-      Guías afectadas bajo el mismo criterio (se saltó más de 1 vuelo o no ha volado),
-      contadas en la semana/mes del vuelo que les correspondía. "% Kilos" = kilos afectados
-      sobre kilos evaluados de ese período.
+      Guías afectadas contadas en la semana/mes del vuelo que les correspondía. Elige el
+      criterio: "% kilos afect." = kilos afectados sobre los kilos totales de ese período.
     </p>
+    <div class="toggle" id="toggle-resumen-crit">
+      {res_crit_btns_html}
+    </div>
+    <p class="sub" id="resumen-crit-desc" style="margin:-2px 0 12px;font-size:12px">{res_crit_desc_default}</p>
     <div class="toggle">
-      <button id="btn-resumen-tabla-semanal" class="active" onclick="verTabla('resumen','semanal')">Semanal</button>
-      <button id="btn-resumen-tabla-mensual" onclick="verTabla('resumen','mensual')">Mensual</button>
+      <button id="btn-resumen-per-semanal" class="active" onclick="verPeriodoResumen('semanal')">Semanal</button>
+      <button id="btn-resumen-per-mensual" onclick="verPeriodoResumen('mensual')">Mensual</button>
     </div>
     <div class="table-wrap">
-      <div id="view-resumen-tabla-semanal" class="view active">
-        <table id="tabla-resumen-semanal" class="sortable">{thead_detalle('tabla-resumen-semanal', True)}<tbody>{tabla_res_semanal}</tbody></table>
-      </div>
-      <div id="view-resumen-tabla-mensual" class="view">
-        <table id="tabla-resumen-mensual" class="sortable">{thead_detalle('tabla-resumen-mensual', False)}<tbody>{tabla_res_mensual}</tbody></table>
-      </div>
+      {res_views_html}
     </div>
   </section>
 
@@ -2920,6 +2959,32 @@ HTML = f"""<!DOCTYPE html>
       document.getElementById('btn-capacidad-tabla-' + s).classList.toggle('active', s === v);
     }});
   }}
+
+  // Tabla "Semana a semana / mes a mes" de la hoja Resumen: filtrable por
+  // criterio (regular / misma semana / permisivo +1 vuelo) x periodo
+  // (semanal / mensual) -- 6 vistas pre-renderizadas (pedido de Jorge,
+  // 2026-09-07; el permisivo dejo de ser el default).
+  var resumenCrit = 'estricto', resumenPer = 'semanal';
+  function _resumenSync() {{
+    ['estricto', 'semana', 'unvuelo'].forEach(function (c) {{
+      ['semanal', 'mensual'].forEach(function (p) {{
+        var v = document.getElementById('view-resumen-' + c + '-' + p);
+        if (v) v.classList.toggle('active', c === resumenCrit && p === resumenPer);
+      }});
+    }});
+    Array.prototype.slice.call(document.querySelectorAll('#toggle-resumen-crit button')).forEach(function (btn) {{
+      var on = btn.getAttribute('data-crit') === resumenCrit;
+      btn.classList.toggle('active', on);
+      if (on) {{
+        var d = document.getElementById('resumen-crit-desc');
+        if (d) d.textContent = btn.getAttribute('data-desc') || '';
+      }}
+    }});
+    document.getElementById('btn-resumen-per-semanal').classList.toggle('active', resumenPer === 'semanal');
+    document.getElementById('btn-resumen-per-mensual').classList.toggle('active', resumenPer === 'mensual');
+  }}
+  function verCriterioResumen(c) {{ resumenCrit = c; _resumenSync(); }}
+  function verPeriodoResumen(p) {{ resumenPer = p; _resumenSync(); }}
 
   // Tooltip flotante para los graficos de barra (pedido de Jorge,
   // 2026-09-07): al pasar sobre una barra se resalta (CSS .bar-g:hover) y
