@@ -1507,42 +1507,93 @@ def build_conclusiones():
     semanas_necesitan_vuelo = sum(1 for f in filas_kg if f["vuelos_extra"] >= 1)
     peor_semana_kg = max(filas_kg, key=lambda f: f["kg_exced"]) if filas_kg else None
 
+    # --- Insumos para la lectura estratégica (2026-09-07) ---
+    est_b, sem_b, uno_b = data["estricto"], data["semana"], data["un_vuelo"]
+    ev_g_c = est_b["total_evaluables"]
+    pct_exacto = round(est_b["total_incidentes"] / ev_g_c * 100, 1) if ev_g_c else 0
+    pct_sem_c = round(sem_b["total_incidentes"] / ev_g_c * 100, 1) if ev_g_c else 0
+    pct_uno_c = round(uno_b["total_incidentes"] / ev_g_c * 100, 1) if ev_g_c else 0
+    cl_af = est_b["total_clientes"]
+    cl_ev = est_b["total_clientes_evaluables"]
+    pct_cl_af = round(cl_af / cl_ev * 100, 1) if cl_ev else 0
+
+    sem_estr = est_b["por_semana"]
+    n_sem = len(sem_estr)
+    n_sem_over = sum(1 for v in sem_estr.values() if v["pct"] > TOLERANCIA_MAX_PCT)
+
+    mes_estr = est_b["por_mes"]
+    meses_altos = sorted(((v["pct"], mo) for mo, v in mes_estr.items() if v["pct"] >= 10), reverse=True)
+    meses_altos_txt = ", ".join(f"{mes_label(mo)} ({fmt_pct(p)})" for p, mo in meses_altos)
+
+    lag_alto = [mo for mo, v in sorted(lag.items())
+                if mo.startswith(str(data["anio_reporte"])) and v.get("mediana_horas", 0) >= 4 and v["n"] >= 50]
+    lag_alto_txt = ", ".join(mes_label(mo) for mo in lag_alto)
+
+    # Capacidad mensual vs tope nominal de 400 kg/vuelo
+    cap_mes = data.get("capacidad_por_mes", [])
+    meses_bajo_400 = sum(1 for c in cap_mes if c["kg_ingreso"] < c["n_vuelos"] * KG_MAX_POR_VUELO)
+
+    # Modelo de umbrales de aduana: casos donde esperar para consolidar el
+    # despacho evita un costo (ad-valorem sobre USD 500 o agente sobre USD 3.000)
+    mu = data.get("modelo_umbrales_aduana", {})
+    casos_ad = mu.get("casos", [])
+    n_casos_ad = len(casos_ad)
+    ahorro_ad = sum(c.get("costo_evitado_clp_estimado", 0) for c in casos_ad)
+    casos_ad_afect = sum(1 for c in casos_ad if c.get("afectada_estricto_segundo"))
+
+    def _decision(lectura, accion):
+        return (
+            '<div class="conclu-cajas">'
+            f'<div class="conclu-caja"><h4>Lectura de negocio</h4><p>{lectura}</p></div>'
+            f'<div class="conclu-caja accion"><h4>Decisión / acción propuesta</h4><p>{accion}</p></div>'
+            '</div>'
+        )
+
     return f"""
   <p class="sub">
-    Por qué mayo y junio muestran una tasa de guías afectadas tan alta respecto al resto del
-    año, y si hace falta un vuelo adicional a la semana. Se probaron tres hipótesis con los
-    datos — pedido explícito de Jorge de separar las guías <b>consolidadas</b> (varias guías
-    originales fundidas en una sola antes de volar) del resto para analizarlas aparte, en vez
-    de mezclarlas — y se agregó un cuarto punto con los kilos excedentes semana a semana.
+    Lectura del reporte para decisiones — mirada de gerencia comercial y general. Cada punto
+    trae el <b>dato</b>, lo que <b>significa para el negocio</b> y la <b>decisión</b> que
+    sugiere. El detalle numérico está en las otras pestañas.
   </p>
 
+  <div class="kpis">
+    <div class="kpi bad"><div class="v">{fmt_pct(pct_exacto)}</div><div class="l">Guías que no volaron en su vuelo exacto ({fmt_n(est_b['total_incidentes'])} de {fmt_n(ev_g_c)}) — sobre el {fmt_pct(TOLERANCIA_MAX_PCT)} acordado</div></div>
+    <div class="kpi"><div class="v">{fmt_pct(pct_sem_c)}</div><div class="l">…pero que tampoco volaron dentro de su semana ({fmt_n(sem_b['total_incidentes'])}) — <b>bajo</b> el {fmt_pct(TOLERANCIA_MAX_PCT)}</div></div>
+    <div class="kpi"><div class="v">{n_sem_over} de {n_sem}</div><div class="l">Semanas del año sobre la tolerancia del {fmt_pct(TOLERANCIA_MAX_PCT)} (vuelo exacto)</div></div>
+    <div class="kpi"><div class="v">{fmt_pct(pct_cl_af)}</div><div class="l">Clientes con al menos una guía afectada ({fmt_n(cl_af)} de {fmt_n(cl_ev)})</div></div>
+  </div>
+
   <section>
-    <h2>1. No es un problema de capacidad total de vuelos (descartado)</h2>
+    <h2>1. El compromiso con el cliente se está cumpliendo; el "vuelo exacto" es una meta interna</h2>
     <p class="sub" style="margin-bottom:14px">
-      Comparando semana a semana la demanda acumulada (guías evaluables) contra la oferta
-      acumulada (suma de guías realmente transportadas por los vuelos del calendario), la
-      oferta {"nunca" if oferta_nunca_bajo_demanda else "casi nunca"} queda por debajo de la
-      demanda acumulada en {data['anio_reporte']} — no se arrastra un déficit estructural de
-      asientos. La única excepción real es la semana del <b>25 de mayo</b> (Memorial Day en
-      EE.UU.), donde los vuelos transportaron muy por debajo del promedio.
+      El mismo universo de guías da tres cifras según qué se considere "afectada":
+      <b>{fmt_pct(pct_exacto)}</b> no tomó su vuelo puntual, pero solo <b>{fmt_pct(pct_sem_c)}</b>
+      no voló dentro de su misma semana, y apenas <b>{fmt_pct(pct_uno_c)}</b> se quedó realmente
+      atrás (no alcanzó ni su vuelo ni el siguiente). La diferencia entre la primera y la
+      segunda cifra son guías que perdieron el vuelo del día pero salieron en otro de esa misma
+      semana — el cliente igual recibió con un desfase de días, no de semanas.
     </p>
-    <div class="kpis">
-      <div class="kpi"><div class="v">{"Sí" if oferta_nunca_bajo_demanda else "Casi"}</div><div class="l">Oferta acumulada ≥ demanda acumulada todo el año</div></div>
-      <div class="kpi bad"><div class="v">{fmt_n(oferta_25may)}</div><div class="l">Guías transportadas semana 25-may (vs. {fmt_n(oferta_prom_otras)} promedio otras semanas)</div></div>
-      <div class="kpi"><div class="v">{fmt_n(demanda_25may)}</div><div class="l">Guías que necesitaban volar esa semana</div></div>
-    </div>
+    {_decision(
+      f"El {fmt_pct(TOLERANCIA_MAX_PCT)} acordado se incumple si se mide por vuelo exacto ({fmt_pct(pct_exacto)}), "
+      f"pero se cumple con holgura si el compromiso es \"vuela en su semana\" ({fmt_pct(pct_sem_c)}). "
+      f"Hoy el reporte muestra el número más exigente como titular, que no es el que vive el cliente.",
+      "Definir con la gerencia comercial cuál es el <b>SLA que se le promete al cliente</b> "
+      "(y comunicarlo): recomendación, \"tu compra vuela dentro de la semana de su corte\". "
+      "El \"vuelo exacto\" queda como <b>KPI operacional interno</b> de eficiencia de Miami, "
+      "con su propia meta. Así el mismo dato deja de leerse como una crisis.")}
   </section>
 
   <section>
-    <h2>2. Causa real y sistemática: se alargó el tiempo de asignación a guía madre</h2>
+    <h2>2. El problema es estacional y operacional (Miami), no falta de aviones</h2>
     <p class="sub" style="margin-bottom:14px">
-      Tiempo entre que una guía queda "lista para volar" (pago + factura) y el momento en que
-      el sistema la asigna a una guía madre. La mediana pasa de menos de 2 horas (dic-mar) a
-      4-11,5 horas (may-jul). Consistente con esto: la gran mayoría de los incidentes
-      (definición "vuelo exacto") se saltan exactamente UN vuelo — alcanzan el siguiente, no se
-      quedan varados varias semanas — lo que apunta a un procesamiento más lento que deja la
-      guía lista después del corte de manifiesto (víspera 18:00) del vuelo que le tocaba, no a
-      una escasez de vuelos.
+      La tasa de vuelo exacto no es pareja: se dispara en <b>{meses_altos_txt or "los meses de temporada alta"}</b>
+      y baja a 0-4% en temporada baja (feb-mar, jun, ago). Sube en paralelo el tiempo que tarda
+      el sistema en asignar una guía a su guía madre: la mediana pasa de <b>&lt;2 horas</b> en
+      temporada baja a <b>4-11,5 horas</b> en {lag_alto_txt or "los meses altos"}. Cuando ese
+      procesamiento se atrasa, la guía queda lista <i>después</i> del corte de manifiesto
+      (víspera 18:00) y pierde su vuelo — no porque no hubiera cupo, sino porque llegó tarde al
+      manifiesto. Lo confirma que casi todas las afectadas se saltan <b>un solo</b> vuelo y
+      enganchan el siguiente.
     </p>
     <div class="table-wrap" style="max-height:340px">
       <table id="tabla-lag" class="sortable"><thead><tr>
@@ -1551,33 +1602,86 @@ def build_conclusiones():
         <th onclick="ordenarTabla('tabla-lag',2,'num')">P90 espera asignación</th>
       </tr></thead><tbody>{filas_lag}</tbody></table>
     </div>
+    {_decision(
+      "El cuello de botella es <b>capacidad de procesamiento en Miami</b> en los meses de mayor "
+      "volumen, no la parrilla de vuelos. Comprar frecuencia aérea extra no movería la aguja y "
+      "sumaría costo fijo.",
+      "Reforzar la dotación / turnos de armado y asignación de guía madre en Miami en la "
+      "ventana <b>abril-agosto</b> (temporada alta), y adelantar el cierre operativo del "
+      "manifiesto para procesar por lotes antes de las 18:00. Medir el efecto sobre la mediana "
+      "de asignación mes a mes en esta misma tabla.")}
   </section>
 
   <section>
-    <h2>3. Guías consolidadas: la fricción del proceso de consolidación existe, pero ya no genera brecha de cumplimiento</h2>
+    <h2>3. El cupo aéreo no es el límite: los vuelos van bajo el tope de 400 kg en promedio</h2>
     <p class="sub" style="margin-bottom:14px">
-      El correo (etiqueta Gmail <code>1. 2ebox/Consolidaciones</code>, 318 mensajes, 2021-2026)
-      muestra que la consolidación se opera fuera del sistema: la ejecutiva lista las guías a
-      mano en un mail con un tope FOB por bulto, Miami arma los bultos "al ojo", las facturas
-      llegan goteando y a veces obligan a rearmar los bultos completos (caso CL29319000: 8
-      correos en 2,5 h, 4 días parado hasta marcarlo "urgente"), y el registro en el módulo
-      "Consolidaciones" se llena <b>después</b>, como acta. Esa fricción es real. La pregunta
-      cuantitativa: ¿se traduce en que las guías-bulto no vuelan a tiempo más que las
-      individuales? Con los datos 2026, y aplicando el corte de manifiesto (la guía tiene que
-      estar lista la víspera del vuelo hasta las 18:00), la respuesta es <b>no</b>.
+      Con el supuesto de <b>{fmt_n(KG_MAX_POR_VUELO)} kg por vuelo</b>, <b>{meses_bajo_400} de
+      {len(cap_mes)} meses</b> cerraron con menos carga ingresada que la que cabía en ese tope
+      nominal — sobró cupo. Y aun así hubo carga lista esperando (el excedente de demanda). Las
+      dos cosas a la vez confirman el punto anterior: la carga no cabe menos veces de las que
+      <i>llega tarde al vuelo</i>. El excedente casi nunca llega a "un vuelo completo" de forma
+      recurrente. Ver pestaña <b>"Capacidad de Vuelos"</b> (tabla con tope de {fmt_n(KG_MAX_POR_VUELO)} kg
+      y columna "No volaron su semana").
     </p>
     <div class="kpis">
-      <div class="kpi"><div class="v">{fmt_pct(fr_ind.get('pct', 0))}</div><div class="l">Individuales que no volaron en su vuelo exacto ({fmt_n(fr_ind.get('afectadas', 0))} de {fmt_n(fr_ind.get('evaluables', 0))})</div></div>
-      <div class="kpi"><div class="v">{fmt_pct(fr_cons.get('pct', 0))}</div><div class="l">Consolidadas (guía-bulto) que no volaron en su vuelo exacto ({fmt_n(fr_cons.get('afectadas', 0))} de {fmt_n(fr_cons.get('evaluables', 0))})</div></div>
-      <div class="kpi"><div class="v">{fmt_pct(fr_neto.get('pct', 0))}</div><div class="l">Consolidadas "neto" — descontando las {fmt_n(fr_af_fp.get('n', 0))} con factura pendiente al cerrar el bulto</div></div>
+      <div class="kpi"><div class="v">{fmt_kg(prom_kg_exced_semana)}</div><div class="l">Excedente promedio por semana (kg de demanda sin subir)</div></div>
+      <div class="kpi"><div class="v">{semanas_necesitan_vuelo} de {len(filas_kg)}</div><div class="l">Semanas con excedente ≥ 1 vuelo completo</div></div>
+      <div class="kpi"><div class="v">{meses_bajo_400} de {len(cap_mes)}</div><div class="l">Meses que cerraron por debajo del tope de {fmt_n(KG_MAX_POR_VUELO)} kg/vuelo</div></div>
     </div>
+    <div class="table-wrap" style="max-height:320px">
+      <table id="tabla-kg-excedente" class="sortable"><thead><tr>
+        <th onclick="ordenarTabla('tabla-kg-excedente',0,'str')">Semana (lunes)</th>
+        <th onclick="ordenarTabla('tabla-kg-excedente',1,'num')">Kilos ingresados</th>
+        <th onclick="ordenarTabla('tabla-kg-excedente',2,'num')">Kilos que podrían</th>
+        <th onclick="ordenarTabla('tabla-kg-excedente',3,'num')">Kilos excedente</th>
+        <th onclick="ordenarTabla('tabla-kg-excedente',4,'num')">Vuelos extra estimados</th>
+      </tr></thead><tbody>{filas_capacidad_kg}</tbody></table>
+    </div>
+    <p class="sub" style="margin-top:12px">
+      Ojo: los kilos excedentes se concentran en pocos paquetes atípicamente pesados que se
+      suman semana tras semana mientras esperan (mediana real ~2 kg). Para dimensionar
+      capacidad recurrente, el <b>conteo de guías</b> es la señal confiable.
+    </p>
+    {_decision(
+      "No hay caso de negocio para contratar un vuelo extra fijo a la semana. El gasto sería "
+      "estructural y resolvería un problema que es de <b>timing de procesamiento</b>, no de "
+      "volumen aéreo.",
+      "Mantener la parrilla actual. Usar los vuelos bonus de viernes/lunes como válvula (ya "
+      "funciona: 4 de cada 10 guías vuelan <i>antes</i> de lo que les tocaba). Revisar un "
+      "vuelo puntual adicional solo para semanas identificadas de pico real (Memorial Day, "
+      "peaks de campaña), no como norma.")}
+  </section>
+
+  <section>
+    <h2>4. Una parte de las "afectadas" es optimización de costo de aduana, no una falla</h2>
     <p class="sub" style="margin-bottom:14px">
-      Con una regla de corte laxa (mismo día del vuelo) las consolidadas se veían bastante peor
-      que las individuales, porque las guías-bulto quedan "listas" en la tarde cuando se arma
-      el bulto. Aplicando el corte de manifiesto de la víspera, individuales y consolidadas
-      están prácticamente iguales
-      ({fmt_pct(fr_ind.get('pct', 0))} vs {fmt_pct(fr_cons.get('pct', 0))}). Queda una brecha
-      residual sólo en temporada baja (enero-febrero) — ver tabla por mes.
+      El modelo de umbrales de aduana (ver pestaña <b>"Modelo Aduana"</b>) detecta
+      <b>{fmt_n(n_casos_ad)} casos</b> en 2026 donde dos guías del mismo cliente, despachadas
+      con pocos días de diferencia, si se hubieran esperado y despachado juntas habrían evitado
+      cruzar un umbral de arancel (ad-valorem sobre USD 500) o de agente de aduana (sobre
+      USD 3.000). El ahorro estimado combinado es de <b>~{fmt_clp(ahorro_ad)}</b> en el año.
+      De esos casos, en <b>{fmt_n(casos_ad_afect)}</b> la segunda guía figura hoy como
+      "afectada" por vuelo exacto — cuando esa espera puede ser la decisión correcta.
+    </p>
+    {_decision(
+      "Parte del \"incumplimiento\" es —o debería ser— una espera deliberada que le ahorra "
+      "plata al cliente. Contarla como falla castiga una buena práctica y ensucia el KPI.",
+      "Formalizar una <b>regla de consolidación de despacho por umbral aduanero</b>: cuando "
+      "dos guías de un cliente están cerca de un umbral en una ventana de días, esperar y "
+      "despacharlas juntas. Marcar esos casos en el sistema para excluirlos del conteo de "
+      "afectadas y, de paso, mostrarle al cliente el ahorro como valor agregado del servicio.")}
+  </section>
+
+  <section>
+    <h2>5. Consolidadas: es un riesgo de control, no de cumplimiento</h2>
+    <p class="sub" style="margin-bottom:14px">
+      Las guías consolidadas (guía-bulto) tienen <b>{fmt_pct(fr_cons.get('pct', 0))}</b> de
+      afectación vs <b>{fmt_pct(fr_ind.get('pct', 0))}</b> de las individuales — una brecha
+      chica una vez que se aplica el corte de manifiesto de la víspera. Pero el proceso vive
+      <b>fuera del sistema</b>: la ejecutiva arma la lista por correo (318 mensajes en el
+      histórico), Miami consolida "al ojo", las facturas llegan goteando y a veces obligan a
+      rearmar bultos completos. Ninguna de las señales medibles de esa fricción (factura
+      pendiente, armado lento) predice hoy que la guía no vuele a tiempo.
     </p>
     <div class="table-wrap" style="max-height:300px">
       <table id="tabla-poblacion" class="sortable"><thead><tr>
@@ -1588,99 +1692,44 @@ def build_conclusiones():
         <th onclick="ordenarTabla('tabla-poblacion',4,'num')">Guías consolidadas</th>
       </tr></thead><tbody>{filas_pobl}</tbody></table>
     </div>
-
-    <div class="card" style="margin-top:18px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 18px">
-      <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);margin:0 0 10px">
-        Señales de fricción de consolidación — ninguna predice el atraso
-      </h3>
-      <p class="sub" style="margin:0 0 12px">
-        Se probó con datos si las dos señales medibles del cuello de botella del correo predicen
-        que una guía-bulto no vuele a tiempo. Se comparan las guías-bulto afectadas contra el
-        grupo de control (las que <b>sí</b> volaron en su vuelo exacto). Si el porcentaje es
-        parecido en los dos grupos, la señal no discrimina.
-      </p>
-      <div class="table-wrap" style="max-height:none;margin-bottom:14px">
-        <table><thead><tr>
-          <th>Señal</th><th>En las afectadas</th><th>En las que volaron OK</th><th>¿Discrimina?</th>
-        </tr></thead><tbody>
-          <tr>
-            <td>Consolidación cerrada con <b>factura pendiente</b> (FOB $0)</td>
-            <td>{fmt_pct(fr_af_fp.get('pct', 0))} ({fmt_n(fr_af_fp.get('n', 0))})</td>
-            <td>{fmt_pct(fr_ct_fp.get('pct', 0))} ({fmt_n(fr_ct_fp.get('n', 0))})</td>
-            <td style="color:var(--warn)">Apenas</td>
-          </tr>
-          <tr>
-            <td><b>Armado lento</b>: &gt;3 días entre crear el bulto y quedar lista</td>
-            <td>{fmt_pct(fr_af_al.get('pct', 0))} ({fmt_n(fr_af_al.get('n', 0))})</td>
-            <td>{fmt_pct(fr_ct_al.get('pct', 0))} ({fmt_n(fr_ct_al.get('n', 0))})</td>
-            <td style="color:var(--ink-faint)">No</td>
-          </tr>
-        </tbody></table>
-      </div>
-      <p class="sub" style="margin:0 0 12px">
-        Por eso <b>no se descuentan del reporte automáticamente</b>. El criterio
-        <b>"neto de consolidación"</b> de la pestaña Consolidadas solo resta las guías con
-        factura pendiente al cerrar el bulto (dato de sistema, inequívoco: la factura llegó
-        tarde y con eso la fecha "lista" — que exige factura en Miami — quedó tironeada). Las
-        demás señales quedan como <b>filtros</b> en la pestaña "Guías afectadas" (Población,
-        Tamaño de consolidación, Señal de fricción) para explorarlas por segmento.
-      </p>
-      <p class="sub" style="margin:0 0 8px"><b>Guías-bulto afectadas con alguna señal de fricción, por mes:</b></p>
-      <div class="table-wrap" style="max-height:280px">
-        <table id="tabla-friccion-mes" class="sortable"><thead><tr>
-          <th onclick="ordenarTabla('tabla-friccion-mes',0,'str')">Mes</th>
-          <th onclick="ordenarTabla('tabla-friccion-mes',1,'num')">Afectadas (guía-bulto)</th>
-          <th onclick="ordenarTabla('tabla-friccion-mes',2,'num')">…con factura pendiente</th>
-          <th onclick="ordenarTabla('tabla-friccion-mes',3,'num')">…con armado lento</th>
-        </tr></thead><tbody>{filas_fr_mes}</tbody></table>
-      </div>
-      <p class="sub" style="margin:12px 0 0">
-        Diagnóstico completo del proceso de consolidación (cuellos de botella con evidencia
-        datada, propuesta de flujo nuevo) en
-        <code>Projects/2EBOX/Procesos-Logistica-Operacion/docs/FLUJO_CONSOLIDACIONES.md</code> y
-        <code>analisis_vuelos_no_volados/CONSOLIDACIONES_CORREO.md</code>. Mover la decisión de
-        consolidación adentro del sistema sigue teniendo sentido operativo (menos correos, menos
-        errores de asignación), aunque el impacto medible sobre el cumplimiento de vuelos sea hoy
-        marginal.
-      </p>
+    <p class="sub" style="margin-top:12px"><b>Guías-bulto afectadas con alguna señal de fricción, por mes:</b></p>
+    <div class="table-wrap" style="max-height:260px">
+      <table id="tabla-friccion-mes" class="sortable"><thead><tr>
+        <th onclick="ordenarTabla('tabla-friccion-mes',0,'str')">Mes</th>
+        <th onclick="ordenarTabla('tabla-friccion-mes',1,'num')">Afectadas (guía-bulto)</th>
+        <th onclick="ordenarTabla('tabla-friccion-mes',2,'num')">…con factura pendiente</th>
+        <th onclick="ordenarTabla('tabla-friccion-mes',3,'num')">…con armado lento</th>
+      </tr></thead><tbody>{filas_fr_mes}</tbody></table>
     </div>
+    {_decision(
+      "El impacto sobre el cumplimiento de vuelos es marginal <i>hoy</i>, pero el proceso "
+      "manual por correo es un riesgo latente: depende de personas, no escala, y un error de "
+      "armado se paga en re-trabajo y en aduana. No es urgente por SLA, sí lo es por control.",
+      "Priorizar en el backlog de producto llevar la <b>decisión de consolidación adentro del "
+      "sistema</b> (menos correos, menos errores de asignación, trazabilidad). Prioridad "
+      "media: después de reforzar el procesamiento de temporada alta (punto 2), antes de "
+      "cualquier inversión en frecuencia aérea. Diagnóstico y propuesta de flujo en "
+      "<code>docs/FLUJO_CONSOLIDACIONES.md</code>.")}
   </section>
 
   <section>
-    <h2>4. Kilos excedentes por semana — ¿hace falta un vuelo extra?</h2>
+    <h2>6. Los clientes afectados se concentran donde más duele</h2>
     <p class="sub" style="margin-bottom:14px">
-      Por semana: kilos que efectivamente volaron (capacidad real) vs. kilos que había
-      disponibles para volar (demanda). El excedente es lo que se quedó esperando por falta de
-      cupo. "Vuelos extra estimados" divide ese excedente por el tamaño promedio de un vuelo
-      real este año ({fmt_kg(kg_vuelo_prom)}) — sirve como referencia de cuántos vuelos de
-      tamaño típico harían falta para absorberlo, no un cálculo exacto de capacidad de bodega
-      de ningún avión puntual. Ver pestaña <b>"Capacidad de Vuelos"</b> para el detalle a nivel
-      de guías (no kilos) y por vuelo individual.
+      {fmt_n(cl_af)} clientes ({fmt_pct(pct_cl_af)} de la base activa) tuvieron al menos una
+      guía que no voló en su vuelo exacto en 2026. No están repartidos parejo: pesan los
+      canales de convenio (Kathy, Tiare), los <b>clientes VIP</b> y los convenios de banco
+      (Santander, BCI, Itaú) — justo los segmentos de mayor valor y mayor costo de fuga. Una
+      mala experiencia de entrega en esos clientes vale mucho más que el promedio.
     </p>
-    <p class="sub" style="margin-bottom:14px">
-      <b>Ojo con los kilos específicamente:</b> a diferencia del conteo de guías, los kilos
-      excedentes tienden a concentrarse en unos pocos paquetes atípicamente pesados (la mediana
-      real es ~2 kg) que quedan varias semanas seguidas sin volar y se suman una y otra vez
-      mientras siguen esperando. Para decidir si hace falta un vuelo extra <b>regular a la
-      semana</b>, el conteo de guías (pestaña "Capacidad de Vuelos") es la señal más confiable;
-      los kilos de abajo dan el orden de magnitud, pero un puñado de paquetes pesados puntuales
-      pueden inflar el total sin que sea un problema de capacidad semanal recurrente.
-    </p>
-    <div class="kpis">
-      <div class="kpi bad"><div class="v">{fmt_kg(total_kg_exced)}</div><div class="l">Kilos excedentes acumulados (2026)</div></div>
-      <div class="kpi"><div class="v">{fmt_kg(prom_kg_exced_semana)}</div><div class="l">Promedio de excedente por semana</div></div>
-      <div class="kpi"><div class="v">{semanas_necesitan_vuelo} de {len(filas_kg)}</div><div class="l">Semanas con excedente ≥ 1 vuelo completo</div></div>
-      <div class="kpi bad"><div class="v">{semana_label(peor_semana_kg['semana']) if peor_semana_kg else 's/d'}</div><div class="l">Peor semana ({fmt_kg(peor_semana_kg['kg_exced']) if peor_semana_kg else 's/d'} de excedente)</div></div>
-    </div>
-    <div class="table-wrap" style="max-height:340px">
-      <table id="tabla-kg-excedente" class="sortable"><thead><tr>
-        <th onclick="ordenarTabla('tabla-kg-excedente',0,'str')">Semana (lunes)</th>
-        <th onclick="ordenarTabla('tabla-kg-excedente',1,'num')">Kilos ingresados</th>
-        <th onclick="ordenarTabla('tabla-kg-excedente',2,'num')">Kilos que podrían</th>
-        <th onclick="ordenarTabla('tabla-kg-excedente',3,'num')">Kilos excedente</th>
-        <th onclick="ordenarTabla('tabla-kg-excedente',4,'num')">Vuelos extra estimados</th>
-      </tr></thead><tbody>{filas_capacidad_kg}</tbody></table>
-    </div>
+    {_decision(
+      "El daño comercial de una demora no es proporcional al número de guías: se concentra en "
+      "cuentas premium y de convenio, donde la relación es de largo plazo y la competencia "
+      "está atenta.",
+      "Protocolo de <b>servicio proactivo</b> para los afectados de alto valor: aviso "
+      "anticipado de la nueva fecha estimada + seguimiento de la ejecutiva de cuenta, sin "
+      "esperar el reclamo. Usar los filtros de la pestaña \"Guías afectadas\" (Convenio, "
+      "Ejecutiva) para generar esa lista cada semana. Revisar mensualmente con la gerencia "
+      "comercial la lista de clientes VIP/convenio con incidencias repetidas.")}
   </section>
 """
 
@@ -2890,6 +2939,14 @@ HTML = f"""<!DOCTYPE html>
   .hallazgos h3 {{ font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); margin: 0 0 10px; }}
   .hallazgos ul {{ margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.8; }}
   @media (max-width: 640px) {{ .hallazgos {{ grid-template-columns: 1fr; }} }}
+  /* Cajas "lectura de negocio / decisión" de la hoja Conclusiones */
+  .conclu-cajas {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; }}
+  .conclu-caja {{ background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }}
+  .conclu-caja.accion {{ border-color: var(--2e-blue); border-left: 3px solid var(--2e-blue); }}
+  .conclu-caja h4 {{ font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); margin: 0 0 8px; }}
+  .conclu-caja.accion h4 {{ color: var(--2e-blue); }}
+  .conclu-caja p {{ margin: 0; font-size: 13px; line-height: 1.65; }}
+  @media (max-width: 720px) {{ .conclu-cajas {{ grid-template-columns: 1fr; }} }}
   details.foot-note {{ font-size: 11.5px; color: var(--ink-faint); line-height: 1.7; }}
   details.foot-note summary {{ cursor: pointer; font-weight: 600; color: var(--ink); margin-bottom: 8px; }}
   code {{ background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-size: 11px; }}
