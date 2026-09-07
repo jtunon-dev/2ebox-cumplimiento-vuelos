@@ -96,11 +96,13 @@ def gauge_tolerancia_html(pct, extra_label=""):
     marcador_pct = pos(pct)
     label = f"{fmt_pct(pct)}" + (f" {extra_label}" if extra_label else "")
 
-    # Los ticks de 5%/10% NO llevan texto propio (cuando el marcador cae
-    # cerca de uno de los dos -- caso frecuente, ya que 5-10% es justo la
-    # zona de alerta -- el texto flotante del tick se pisaba con la
-    # burbuja del marcador). La referencia va en una leyenda fija abajo,
-    # que nunca se mueve ni se superpone.
+    # Los topes de 5% / 10% llevan su número rotulado DEBAJO del track
+    # (el marcador y su burbuja van por ARRIBA, así que no se pisan). Si el
+    # marcador cae muy cerca de un tope, el rótulo de ese tope se corre un
+    # poco para que no quede tapado por la línea del marcador.
+    def _shift(v):
+        return -50 if abs(marcador_pct - pos(v)) > 6 else (-100 if marcador_pct >= pos(v) else 0)
+
     return f"""
   <div class="tol-gauge">
     <div class="tol-gauge-track" style="background-image:{gradiente}">
@@ -108,11 +110,11 @@ def gauge_tolerancia_html(pct, extra_label=""):
       <div class="tol-gauge-tick doble" style="left:{pos(doble)}%"></div>
       <div class="tol-gauge-marker" style="left:{marcador_pct}%"><span class="tg-marker-label">{label}</span></div>
     </div>
-    <div class="tol-gauge-scale"><span>0%</span><span>{fmt_pct(scale_max)}</span></div>
-    <div class="tol-gauge-legend">
-      <span class="tg-leg"><i style="border-color:var(--bad)"></i>Tolerancia {fmt_pct(tope)}</span>
-      <span class="tg-leg"><i style="border-color:var(--bad-dark)"></i>Doble ({fmt_pct(doble)}) — grave</span>
+    <div class="tol-gauge-ticklabels">
+      <span class="tg-tick-lbl" style="left:{pos(tope)}%;transform:translateX({_shift(tope)}%)"><b>{fmt_pct(tope)}</b><i>tolerancia</i></span>
+      <span class="tg-tick-lbl doble" style="left:{pos(doble)}%;transform:translateX({_shift(doble)}%)"><b>{fmt_pct(doble)}</b><i>doble — grave</i></span>
     </div>
+    <div class="tol-gauge-scale"><span>0%</span><span>{fmt_pct(scale_max)}</span></div>
   </div>
 """
 
@@ -2522,7 +2524,12 @@ HTML = f"""<!DOCTYPE html>
     background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
     padding: 3px 9px; white-space: nowrap;
   }}
-  .tol-gauge-scale {{ display: flex; justify-content: space-between; font-size: 9.5px; color: var(--ink-faint); margin-top: 24px; }}
+  .tol-gauge-ticklabels {{ position: relative; height: 30px; margin-top: 7px; }}
+  .tg-tick-lbl {{ position: absolute; top: 0; display: flex; flex-direction: column; align-items: center; line-height: 1.15; white-space: nowrap; }}
+  .tg-tick-lbl b {{ font-family: 'Russo One', system-ui, sans-serif; font-size: 12px; color: var(--bad); }}
+  .tg-tick-lbl.doble b {{ color: var(--bad-dark); }}
+  .tg-tick-lbl i {{ font-style: normal; font-size: 9px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); }}
+  .tol-gauge-scale {{ display: flex; justify-content: space-between; font-size: 9.5px; color: var(--ink-faint); margin-top: 2px; }}
   .tol-gauge-legend {{ display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; }}
   .tg-leg {{ display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--ink-faint); }}
   .tg-leg i {{ display: inline-block; width: 14px; height: 0; border-top: 2px dashed; flex-shrink: 0; }}
