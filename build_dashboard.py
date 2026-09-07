@@ -1511,11 +1511,6 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     filas = []
     for r in universo:
         mo = r["vuelo_esperado"][:7]
-        # Día de la SEMANA (0=lunes .. 6=domingo) en que la guía quedó lista
-        # -- pedido de Jorge (2026-09-04): el heatmap de cumplimiento tiene
-        # más sentido por día de semana que por día del mes (los vuelos son
-        # siempre miércoles/viernes, así que el ciclo relevante es semanal).
-        dow = date.fromisoformat(r["vuelo_esperado"][:10]).weekday()
         conv = r["convenio"] or ""
         afectada = bool(r["no_volo_" + scope])
         if afectada:
@@ -1560,7 +1555,11 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         filas.append({
             "n": r["n_guia"] if afectada else None,
             "mo": mo,
-            "dow": dow,
+            # mes y día de semana en que la guía quedó LISTA (pago + factura)
+            # -- el heatmap se agrupa por esto (Jorge, 2026-09-07), no por el
+            # mes/día del vuelo que le correspondía.
+            "hmo": r["fl_mo"],
+            "hdow": r["fl_dow"],
             "eje": clasificar_ejecutiva(conv),
             "conv": conv,
             "cas": r["casilla"] or "",
@@ -1597,7 +1596,7 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     # cumplimiento (que sí necesita los meses sin ningún incidente, para
     # poder mostrarlos en 100% verde).
     afectadas_todas = [r for r in filas if r["af"]]
-    meses_presentes = sorted(set(r["mo"] for r in filas))
+    meses_presentes = sorted(set(r["mo"] for r in filas) | set(r["hmo"] for r in filas))
     convenio_counts = Counter(r["conv"] for r in afectadas_todas)
     convenios_ordenados = sorted(convenio_counts.items(), key=lambda kv: -kv[1])
     ejecutiva_counts = Counter(r["eje"] for r in afectadas_todas)
@@ -1743,6 +1742,8 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         <b>% de cumplimiento</b>: de todas las guías que quedaron listas ese día de semana en ese
         mes, qué porción alcanzó a volar a tiempo (no contó como afectada bajo el criterio
         "{titulo_bloque}"). El número chico de abajo es el conteo exacto (a tiempo / total).
+        La última columna ("Total mes") y la última fila ("Total día") son los <b>totales
+        ponderados</b> (suma de a tiempo ÷ suma de total, no promedio de porcentajes).
         <br><b>Ejemplo:</b> una celda en la fila <i>Ago 2026</i>, columna <i>Mié</i>, que diga
         "<b>98%</b> · 314/320" se lee: de las 320 guías que quedaron listas un miércoles de
         agosto, 314 (el 98%) volaron a tiempo y 6 contaron como afectadas. Verde = cumplimiento
@@ -1911,48 +1912,61 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     }}
 
     // Días de semana en el mismo orden que Python date.weekday() (0=lunes,
-    // ..., 6=domingo) -- pedido de Jorge (2026-09-04): el heatmap es por día
-    // de SEMANA, no por día del mes (los vuelos son siempre miércoles/
-    // viernes, el ciclo relevante es semanal, no el número de día 1-31).
+    // ..., 6=domingo). El heatmap se agrupa por el MES y el DÍA DE SEMANA en
+    // que la guía quedó LISTA (campos hmo/hdow), no por el vuelo que le tocaba
+    // (Jorge, 2026-09-04 y 2026-09-07).
     var GA_DOW_LABEL = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+    function gaCelda(o, t, etiqueta, extra) {{
+      // devuelve el <td> de una celda (o = a tiempo, t = total). etiqueta va
+      // al tooltip. t=0 -> celda vacía. extra = clase(s) CSS extra opcional.
+      var cls = 'heatmap-cell' + (extra ? ' ' + extra : '');
+      if (!t) return '<td class="' + cls + ' vacia"></td>';
+      var pct = (o / t) * 100;
+      return '<td class="' + cls + '" style="background:' + gaHeatColor(pct) + '" title="' +
+        etiqueta + ': ' + o + ' de ' + t + ' guías a tiempo (' + pct.toFixed(0) + '% de cumplimiento)">' +
+        '<div class="hm-pct">' + pct.toFixed(0) + '%</div>' +
+        '<div class="hm-n">' + o + '/' + t + '</div></td>';
+    }}
     function gaRenderHeatmap(universo, cumplidas) {{
       var tot = {{}}, ok = {{}};
+      var totMes = {{}}, okMes = {{}}, totDow = [0,0,0,0,0,0,0], okDow = [0,0,0,0,0,0,0];
+      var totAll = 0, okAll = 0;
       universo.forEach(function (r) {{
-        var k = r.mo + '-' + r.dow;
-        tot[k] = (tot[k] || 0) + 1;
+        tot[r.hmo + '-' + r.hdow] = (tot[r.hmo + '-' + r.hdow] || 0) + 1;
+        totMes[r.hmo] = (totMes[r.hmo] || 0) + 1;
+        totDow[r.hdow] += 1; totAll += 1;
       }});
       cumplidas.forEach(function (r) {{
-        var k = r.mo + '-' + r.dow;
-        ok[k] = (ok[k] || 0) + 1;
+        ok[r.hmo + '-' + r.hdow] = (ok[r.hmo + '-' + r.hdow] || 0) + 1;
+        okMes[r.hmo] = (okMes[r.hmo] || 0) + 1;
+        okDow[r.hdow] += 1; okAll += 1;
       }});
-      var meses = Array.from(new Set(universo.map(function (r) {{ return r.mo; }}))).sort();
+      var meses = Array.from(new Set(universo.map(function (r) {{ return r.hmo; }}))).sort();
+      if (!meses.length) {{
+        document.getElementById('ga-heatmap-{sfx}').innerHTML = '<p class="empty-note">Sin guías para este filtro.</p>';
+        return;
+      }}
       var html = '<div class="heatmap-scroll"><table class="heatmap-tabla"><thead><tr><th></th>';
       for (var dow = 0; dow <= 6; dow++) html += '<th>' + GA_DOW_LABEL[dow] + '</th>';
-      html += '</tr></thead><tbody>';
+      html += '<th class="heatmap-tot">Total mes</th></tr></thead><tbody>';
       meses.forEach(function (mo) {{
         html += '<tr><th class="heatmap-mes">' + (GA_MESES_LABEL[mo] || mo) + '</th>';
         for (var dow = 0; dow <= 6; dow++) {{
           var k = mo + '-' + dow;
-          var t = tot[k] || 0;
-          if (!t) {{
-            html += '<td class="heatmap-cell vacia"></td>';
-            continue;
-          }}
-          var o = ok[k] || 0;
-          var pct = (o / t) * 100;
-          // El número visible ES el % de cumplimiento (mismo que el color).
-          // El conteo exacto (o de t) queda en el tooltip.
-          html += '<td class="heatmap-cell" style="background:' + gaHeatColor(pct) + '" title="' +
-            (GA_MESES_LABEL[mo] || mo) + ', ' + GA_DOW_LABEL[dow] + ': ' + o + ' de ' + t +
-            ' guías subieron a tiempo (' + pct.toFixed(0) + '% de cumplimiento)">' +
-            '<div class="hm-pct">' + pct.toFixed(0) + '%</div>' +
-            '<div class="hm-n">' + o + '/' + t + '</div></td>';
+          html += gaCelda(ok[k] || 0, tot[k] || 0, (GA_MESES_LABEL[mo] || mo) + ' · ' + GA_DOW_LABEL[dow]);
         }}
+        html += gaCelda(okMes[mo] || 0, totMes[mo] || 0, (GA_MESES_LABEL[mo] || mo) + ' · total del mes', 'heatmap-tot');
         html += '</tr>';
       }});
-      html += '</tbody></table></div>';
+      // Fila de totales por día de semana (ponderado: suma a tiempo / suma total)
+      html += '<tr><th class="heatmap-mes heatmap-tot">Total día</th>';
+      for (var dow = 0; dow <= 6; dow++) {{
+        html += gaCelda(okDow[dow], totDow[dow], GA_DOW_LABEL[dow] + ' · total de todos los meses', 'heatmap-tot');
+      }}
+      html += gaCelda(okAll, totAll, 'Total general', 'heatmap-tot heatmap-tot-all');
+      html += '</tr></tbody></table></div>';
       var el = document.getElementById('ga-heatmap-{sfx}');
-      el.innerHTML = meses.length ? html : '<p class="empty-note">Sin guías para este filtro.</p>';
+      el.innerHTML = html;
     }}
 
     function gaRender() {{
@@ -2425,12 +2439,12 @@ HTML = f"""<!DOCTYPE html>
     .ed-arrow {{ transform: rotate(90deg); }}
   }}
   /* Heatmap "Cumplimiento por día de la semana" dentro de Guías afectadas
-     (pedido de Jorge, 2026-09-03, ajustado a día de SEMANA 2026-09-04):
-     filas = mes, columnas = día de semana (lunes a domingo). El número y el
-     color de cada celda = % de guías que quedaron listas ese día y subieron
-     a tiempo bajo el criterio activo. Se recalcula en JS junto con el resto
-     de la pestaña -- ver gaRenderHeatmap(). El contenedor se ajusta al
-     ancho real de la tabla (no ocupa todo el margen -- Jorge, 2026-09-07). */
+     (Jorge, 2026-09-03..09-07): filas = mes en que la guía quedó lista,
+     columnas = día de semana en que quedó lista. Número y color de cada
+     celda = % que subió a tiempo bajo el criterio activo. Última fila /
+     última columna = totales ponderados (suma a tiempo / suma total). El
+     contenedor se ajusta al ancho real de la tabla. Se recalcula en JS
+     junto con el resto de la pestaña -- ver gaRenderHeatmap(). */
   .heatmap-legend {{ display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--ink-faint); margin-bottom: 10px; }}
   .heatmap-legend-bar {{
     display: inline-block; width: 140px; height: 8px; border-radius: 4px;
@@ -2447,6 +2461,10 @@ HTML = f"""<!DOCTYPE html>
   .heatmap-cell .hm-pct {{ font-weight: 700; font-size: 13px; }}
   .heatmap-cell .hm-n {{ font-size: 9.5px; opacity: 0.72; }}
   .heatmap-cell.vacia {{ background: var(--surface-2); border-color: var(--line); }}
+  .heatmap-tabla th.heatmap-tot {{ color: var(--ink); font-weight: 700; }}
+  .heatmap-cell.heatmap-tot {{ border-color: var(--ink-faint); }}
+  .heatmap-cell.heatmap-tot-all {{ outline: 2px solid var(--ink); outline-offset: -2px; }}
+  .heatmap-tabla tbody tr:last-child .heatmap-cell {{ border-top-color: var(--ink-faint); }}
   .kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 26px; }}
   .kpi {{ background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }}
   .kpi .v {{ font-family: 'Russo One', system-ui, sans-serif; font-size: 22px; }}

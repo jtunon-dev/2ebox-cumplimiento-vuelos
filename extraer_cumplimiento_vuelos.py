@@ -106,19 +106,29 @@ CALENDARIO de vuelos a los guia_madres COURIER de 1 sola guia (los 7 casos
 mencionados arriba) -- ya no cuentan como "el vuelo que le correspondia" a
 NINGUNA otra guia tampoco, porque no son vuelos regulares compartidos.
 
---- Correccion de fondo (3): corte de manifiesto (2026-09-02, revisado 2026-09-03) ---
-Existe un horario de corte para subir a un vuelo. Regla ACTUAL (Jorge,
+--- Correccion de fondo (3): corte de manifiesto (2026-09-02, revisado 09-03 y 09-07) ---
+Existe un horario de corte para subir a un vuelo. Regla base (Jorge,
 2026-09-03): la guia tiene que estar LISTA (pago + factura en Miami) a mas
 tardar el DIA ANTERIOR al vuelo, hasta las 18:00. Si queda lista despues de
 ese corte no alcanza ese manifiesto y le corresponde el PRIMER vuelo
-siguiente. Ejemplo: vuelo el miercoles -> corte el martes a las 18:00; una
-guia que queda lista el martes 20:00, o el miercoles, ya no entra a ese
-manifiesto y le toca el vuelo del viernes.
-`primer_vuelo_desde()` recorre el calendario y devuelve el primer vuelo cuyo
-corte (vispera 18:00) sea >= fecha_lista. Constantes
-CORTE_MANIFIESTO_DIAS_ANTES (1) y CORTE_MANIFIESTO_HORA (18). No afecta
-`vuelo_real` (el vuelo en que la guia efectivamente broto, un hecho empirico)
--- solo la determinacion de `vuelo_esperado`.
+siguiente. Ejemplo: vuelo el miercoles -> corte el martes a las 18:00.
+
+EXCEPCION "vuelo del lunes" (Jorge, 2026-09-07): el vuelo de entrega tipica
+lunes (que en el sistema aparece despachado unas veces el viernes >=17:00 y
+otras el lunes am, pero se prepara el viernes) tiene DOS cortes:
+  * OFICIAL = jueves 18:00 de esa semana -> lo usan "vuelo exacto" y "misma
+    semana" (campo vuelo_esperado). Una guia lista el viernes ya no alcanza
+    el corte oficial -> su vuelo esperado es el miercoles siguiente; si igual
+    se sube al vuelo del viernes/lunes, vuela ANTES de su esperado y NO
+    cuenta como incidente (mismo mecanismo que el caso credito).
+  * CORRESPONDIDO = viernes 16:00 de esa semana -> lo usa el criterio
+    "margen 3d / 1 vuelo" (esperado_margen_ts / vuelos_saltados_margen). Ahi
+    la guia lista el viernes SI "le correspondia" el vuelo del lunes.
+Para el resto de los vuelos los dos cortes coinciden (dia anterior 18:00).
+
+`primer_vuelo_desde(fecha_lista, correspondido)` recorre el calendario y
+devuelve el primer vuelo cuyo corte sea >= fecha_lista. No afecta
+`vuelo_real` (hecho empirico) -- solo la determinacion de `vuelo_esperado`.
 (Regla anterior, 2026-09-02: 12:00 del MISMO dia del vuelo -- menos estricta.)
 
 --- Investigacion de causa (2026-09-01) ---
@@ -228,6 +238,26 @@ UMBRAL_ARMADO_LENTO_DIAS = 3
 # igual que la regla anterior.
 CORTE_MANIFIESTO_DIAS_ANTES = 1
 CORTE_MANIFIESTO_HORA = 18
+
+# --- "Vuelo del lunes" (Jorge, 2026-09-04/07) ---
+# Existe un vuelo de entrega tipica LUNES que en el sistema queda registrado
+# como despachado unas veces el VIERNES pasadas las 17:00 y otras el LUNES por
+# la mañana -- pero el bulto se arma y despacha fisicamente el viernes en
+# ambos casos. Se detecta como: ts del vuelo un lunes, O un viernes a las
+# 17:00 o despues.
+#
+# Ese vuelo tiene DOS cortes distintos y cada criterio usa uno:
+#   * CORTE OFICIAL = jueves 18:00 de esa semana (igual que el vuelo del
+#     viernes -- ambos se preparan el viernes). Lo usan "vuelo exacto" y
+#     "misma semana".
+#   * CORTE "CORRESPONDIDO" = viernes 16:00 de esa semana (la carga sigue
+#     entrando el viernes en la tarde porque el vuelo no sale hasta el lunes).
+#     Lo usa el criterio "margen 3d / 1 vuelo".
+# Para el resto de los vuelos (miercoles / viernes normales) los dos cortes
+# coinciden: el dia anterior a las 18:00.
+CORTE_LUNES_OFICIAL_HORA = 18       # jueves 18:00
+CORTE_LUNES_CORRESPONDIDO_HORA = 16  # viernes 16:00
+VUELO_LUNES_VIERNES_HORA_MIN = 17   # un vuelo viernes >= 17:00 tambien es "del lunes"
 # Criterio "margen" (pedido de Jorge, 2026-09-03): un tercer criterio de
 # "afectada", ademas de "vuelo exacto" y "misma semana". Una guia NO cuenta
 # como afectada SOLO si cumple LOS DOS topes a la vez:
@@ -811,21 +841,40 @@ def main():
 
     vuelos_ts = [v["ts"] for v in vuelos]
 
-    def primer_vuelo_desde(fecha_lista):
-        # Primer vuelo del calendario al que la guia alcanza a subirse dado el
-        # corte de manifiesto (busqueda lineal ordenada; volumen bajo,
-        # ~90-150 vuelos, no hace falta bisect). Regla (Jorge, 2026-09-03): la
+    def _es_vuelo_lunes(ts):
+        # ver constantes arriba: entrega lunes, se despacha el viernes.
+        return ts.weekday() == 0 or (ts.weekday() == 4 and ts.hour >= VUELO_LUNES_VIERNES_HORA_MIN)
+
+    def _retroceder_a(ts, weekday):
+        x = ts
+        while x.weekday() != weekday:
+            x -= timedelta(days=1)
+        return x
+
+    def _corte(ts, correspondido):
+        # Corte de manifiesto de un vuelo. Regla base (Jorge, 2026-09-03): la
         # guia tiene que estar lista (pago + factura) a mas tardar el dia
-        # ANTERIOR al vuelo, a las CORTE_MANIFIESTO_HORA (18:00). El primer
-        # vuelo cuyo corte (vispera 18:00) sea >= fecha_lista es "el que le
-        # correspondia". Ejemplo: vuelo el miercoles -> corte martes 18:00;
-        # una guia lista el martes 20:00 (o el miercoles) ya no alcanza ese
-        # manifiesto y le toca el vuelo del viernes.
-        for ts in vuelos_ts:
-            corte = (ts - timedelta(days=CORTE_MANIFIESTO_DIAS_ANTES)).replace(
-                hour=CORTE_MANIFIESTO_HORA, minute=0, second=0, microsecond=0
+        # ANTERIOR al vuelo, a las 18:00. Excepcion "vuelo del lunes" (Jorge,
+        # 2026-09-07): jueves 18:00 (oficial) o viernes 16:00 (correspondido).
+        if _es_vuelo_lunes(ts):
+            if correspondido:
+                return _retroceder_a(ts, 4).replace(  # viernes de esa semana
+                    hour=CORTE_LUNES_CORRESPONDIDO_HORA, minute=0, second=0, microsecond=0
+                )
+            return _retroceder_a(ts, 3).replace(  # jueves de esa semana
+                hour=CORTE_LUNES_OFICIAL_HORA, minute=0, second=0, microsecond=0
             )
-            if fecha_lista <= corte:
+        return (ts - timedelta(days=CORTE_MANIFIESTO_DIAS_ANTES)).replace(
+            hour=CORTE_MANIFIESTO_HORA, minute=0, second=0, microsecond=0
+        )
+
+    def primer_vuelo_desde(fecha_lista, correspondido=False):
+        # Primer vuelo del calendario al que la guia alcanza a subirse dado su
+        # corte (busqueda lineal ordenada; volumen bajo, ~90-150 vuelos).
+        # correspondido=False -> corte OFICIAL (vuelo exacto / misma semana).
+        # correspondido=True  -> corte CORRESPONDIDO (criterio margen).
+        for ts in vuelos_ts:
+            if fecha_lista <= _corte(ts, correspondido):
                 return ts
         return None
 
@@ -838,7 +887,11 @@ def main():
         if not g["pago"] or not g["factura"]:
             continue  # nunca quedo lista (falta pago o factura) -- fuera de alcance
         fecha_lista = max(g["pago"], g["factura"])
-        esperado_ts = primer_vuelo_desde(fecha_lista)
+        # vuelo_esperado bajo el corte OFICIAL (vuelo exacto / misma semana) y
+        # bajo el corte CORRESPONDIDO (criterio margen) -- solo difieren para
+        # el "vuelo del lunes"; para el resto de los vuelos son el mismo.
+        esperado_ts = primer_vuelo_desde(fecha_lista, correspondido=False)
+        esperado_margen_ts = primer_vuelo_desde(fecha_lista, correspondido=True)
         if esperado_ts is None:
             continue  # su primer vuelo posible todavia no ha ocurrido -- pendiente, no evaluable aun
 
@@ -865,28 +918,20 @@ def main():
         # (guias "DAR DE BAJA"/"Nula" sin fecha_asignado_guia_madre) que
         # antes se contaban como "nunca volo" sin serlo realmente.
         #
-        # --- Regla "vuelo del lunes" (Jorge, 2026-09-04) ---
-        # Ademas del caso credito de arriba, este mismo mecanismo (real_ts <
-        # esperado_ts => NO es incidente) cubre otro escenario real: existe
-        # un vuelo de entrega tipica LUNES cuyo despacho queda registrado en
-        # el sistema el VIERNES pasadas las 17:00 -- porque el bulto se arma
-        # y despacha fisicamente el viernes, aunque llegue/entregue el
-        # lunes. El corte de manifiesto OFICIAL para ese vuelo es el mismo
-        # jueves 18:00 que el vuelo del viernes (ambos se preparan el mismo
-        # viernes) -- no se le da un corte mas laxo. Por eso, una guia que
-        # queda lista (pago+factura) el jueves despues de las 18:00 o el
-        # viernes tiene, por definicion, vuelo_esperado = el MIERCOLES de la
-        # semana siguiente (el corte del viernes/lunes ya paso). Si esa guia
-        # de todos modos alcanza a subirse al vuelo del viernes o al "del
-        # lunes" (capacidad extra que hay que aprovechar cuando se puede,
-        # ops lo toma como ganancia -- procesa carga mas rapido de lo
-        # exigido), su vuelo_real queda ANTES de su vuelo_esperado -- el
-        # mismo caso que un cliente con credito, y por eso NO cuenta como
-        # incidente aunque tecnicamente "llego pasado el corte oficial".
-        # Verificado con los datos de 2026: de las guias que realmente
-        # volaron en alguno de los 40 vuelos viernes>=17h del año, 900
-        # "adelantaron" (volaron antes de su esperado) y las 900 quedan
-        # correctamente SIN marcar como afectadas -- 0 falsos positivos.
+        # --- Regla "vuelo del lunes" (Jorge, 2026-09-04, ajustada 2026-09-07) ---
+        # Existe un vuelo de entrega tipica LUNES que en el sistema queda
+        # despachado unas veces el viernes >=17:00 y otras el lunes am (ver
+        # constantes CORTE_LUNES_* arriba). Tiene dos cortes:
+        #   * OFICIAL jueves 18:00  -> lo usan "vuelo exacto" y "misma semana"
+        #     (esperado_ts). Una guia lista el viernes ya no alcanza el corte
+        #     oficial -> su vuelo_esperado es el miercoles siguiente. Si igual
+        #     se sube al vuelo del viernes/lunes (capacidad extra, ganancia
+        #     operativa), su vuelo_real queda ANTES de esperado_ts y por el
+        #     mismo mecanismo del caso credito NO cuenta como incidente.
+        #   * CORRESPONDIDO viernes 16:00 -> lo usa el criterio "margen"
+        #     (esperado_margen_ts). Ahi la guia lista el viernes SI "le
+        #     correspondia" el vuelo del lunes, asi que si no lo alcanza
+        #     cuenta como salto de vuelo para el criterio margen.
         alcanzo_asignacion = g["asignado"] is not None
         no_volo_estricto = alcanzo_asignacion and ((real_ts is None) or (real_ts > esperado_ts))
         # Definicion "semana": mas permisiva -- no es incidente si broto en
@@ -911,9 +956,13 @@ def main():
         # vuelos_saltados: cuantos vuelos del calendario salieron entre el
         # esperado (incluido) y el real (excluido), o hasta ahora si no ha
         # volado. Parte en >=1 para las afectadas (el propio esperado cuenta
-        # como saltado porque no se subio a el).
+        # como saltado porque no se subio a el). Se calcula sobre el esperado
+        # OFICIAL (para el criterio Resumen "1 vuelo") y sobre el esperado
+        # CORRESPONDIDO (para el criterio "margen") -- solo difieren por el
+        # vuelo del lunes.
         limite_dt = real_ts or now_utc
         vuelos_saltados = sum(1 for ts in vuelos_ts if esperado_ts <= ts < limite_dt)
+        vuelos_saltados_margen = sum(1 for ts in vuelos_ts if esperado_margen_ts <= ts < limite_dt)
 
         # --- Criterio "margen" (2026-09-03) ---
         # atraso_lista_dias: dias entre que la guia quedo "lista" y el vuelo en
@@ -923,7 +972,7 @@ def main():
         if real_ts is not None:
             atraso_lista_dias = round((real_ts - fecha_lista).total_seconds() / 86400, 1)
         _margen_dias_ok = real_ts is not None and atraso_lista_dias <= MARGEN_MAX_DIAS
-        _margen_vuelos_ok = real_ts is not None and vuelos_saltados <= MARGEN_MAX_VUELOS_SALTADOS
+        _margen_vuelos_ok = real_ts is not None and vuelos_saltados_margen <= MARGEN_MAX_VUELOS_SALTADOS
         no_volo_margen = alcanzo_asignacion and not (_margen_dias_ok and _margen_vuelos_ok)
 
         # --- Criterio "un vuelo" (2026-09-03, para el Resumen Ejecutivo) ---
@@ -992,6 +1041,12 @@ def main():
             "cons_friccion": cons_friccion,
             "convenio": g["convenio"],
             "fecha_lista": fecha_lista.isoformat(),
+            # Mes y dia de semana (0=lunes) en que la guia quedo LISTA -- usados
+            # por el heatmap de cumplimiento de la pestaña Guias afectadas
+            # (pedido de Jorge, 2026-09-07: que sea por el dia real en que
+            # quedo lista, no por el dia del vuelo que le tocaba).
+            "fl_mo": f"{fecha_lista.year}-{fecha_lista.month:02d}",
+            "fl_dow": fecha_lista.weekday(),
             "fecha_asignado_guia_madre": g["asignado"].isoformat() if g["asignado"] else None,
             "vuelo_esperado": esperado_ts.isoformat(),
             "vuelo_real": real_ts.isoformat() if real_ts else None,
@@ -1236,8 +1291,8 @@ def main():
                     "cons_n_guias", "cons_friccion", "armado_lag_dias",
                     "atraso_lista_dias", "vuelos_saltados",
                     "convenio", "vuelo_esperado", "vuelo_real", "awb",
-                    "aerolinea", "no_volo_estricto", "no_volo_semana",
-                    "no_volo_margen",
+                    "aerolinea", "fl_mo", "fl_dow",
+                    "no_volo_estricto", "no_volo_semana", "no_volo_margen",
                 )
             }
             for d in detalle
