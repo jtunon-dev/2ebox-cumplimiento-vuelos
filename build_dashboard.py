@@ -1869,6 +1869,8 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     filas = []
     for r in universo:
         mo = r["vuelo_esperado"][:7]
+        _ve_d = date.fromisoformat(r["vuelo_esperado"][:10])
+        sem_iso = (_ve_d - timedelta(days=_ve_d.weekday())).isoformat()
         conv = r["convenio"] or ""
         afectada = bool(r["no_volo_" + scope])
         if afectada:
@@ -1913,6 +1915,7 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         filas.append({
             "n": r["n_guia"] if afectada else None,
             "mo": mo,
+            "sem": sem_iso,
             # Para los DOS heatmaps (Jorge, 2026-09-07): uno agrupado por el
             # dia del VUELO que le correspondia (vdow, sobre `mo`), otro por
             # el dia en que la guia quedo LISTA (hdow/hmo).
@@ -1956,6 +1959,12 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     # poder mostrarlos en 100% verde).
     afectadas_todas = [r for r in filas if r["af"]]
     meses_presentes = sorted(set(r["mo"] for r in filas) | set(r["hmo"] for r in filas))
+    # Etiquetas de semana (lunes ISO -> [N° semana, "dd-Mmm"]) para la tabla
+    # "Detalle — total" que ahora se renderiza en JS con los filtros.
+    semanas_label = {
+        s: [semana_numero(s), semana_label(s)]
+        for s in sorted(set(r["sem"] for r in filas))
+    }
     convenio_counts = Counter(r["conv"] for r in afectadas_todas)
     convenios_ordenados = sorted(convenio_counts.items(), key=lambda kv: -kv[1])
     ejecutiva_counts = Counter(r["eje"] for r in afectadas_todas)
@@ -2033,17 +2042,11 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     # filtros de la izquierda. Reusa tabla_html() y las funciones JS globales
     # verTabla()/ordenarTabla().
     det_id = f"gadet-{sfx}"
-    bloque_total = data[scope]
-    det_tabla_mensual = tabla_html(list(bloque_total["por_mes"].items()), mes_label, semanal=False, totales=bloque_total)
-    det_tabla_semanal = tabla_html(list(bloque_total["por_semana"].items()), semana_label, semanal=True, totales=bloque_total)
+    # La tabla "Detalle — total" ahora se renderiza en JS con los filtros de
+    # la pestaña (pedido de Jorge, 2026-09-07): antes era un resumen fijo del
+    # bloque completo. Solo se pre-genera el <thead> (estático).
     det_thead_sem = thead_detalle(f"tabla-{det_id}-semanal", True)
     det_thead_mes = thead_detalle(f"tabla-{det_id}-mensual", False)
-    det_tot = (
-        f"{fmt_n(bloque_total['total_incidentes'])} guías afectadas de "
-        f"{fmt_n(bloque_total['total_evaluables'])} evaluadas · "
-        f"{fmt_kg(bloque_total['total_kilos'])} de {fmt_kg(bloque_total['total_kilos_evaluables'])} · "
-        f"{fmt_n(bloque_total['total_clientes'])} de {fmt_n(bloque_total['total_clientes_evaluables'])} clientes"
-    )
 
     return f"""
   <p class="sub">
@@ -2143,33 +2146,36 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         </table>
       </div>
       <p class="empty-note" id="ga-empty-{sfx}" style="display:none">Sin guías para este filtro.</p>
+
+      <h3 style="font-family:'Russo One',sans-serif;font-weight:400;font-size:12.5px;margin:22px 0 4px">
+        Detalle — total de guías afectadas ({titulo_bloque})
+      </h3>
+      <p class="sub" style="margin-bottom:10px">
+        Resumen mensual / semanal de las guías afectadas que quedan tras aplicar los filtros de
+        la izquierda (individuales + consolidadas juntas). Total según el filtro:
+        <b id="ga-det-tot-{sfx}">—</b>.
+        "Kilos totales" = kilos evaluados de ese período; "% kilos afect." = kilos afectados
+        sobre esos kilos totales; "Clientes afect." = clientes únicos con al menos una guía
+        afectada. La última fila (<b>TOTAL</b>) suma todos los períodos. Los colores de los %
+        usan la escala de la tolerancia acordada (verde &lt;3%, ámbar ~5%, rojo &gt;5%, rojo
+        oscuro &gt;10%).
+      </p>
+      <div class="toggle">
+        <button id="btn-{det_id}-tabla-semanal" class="active" onclick="verTabla('{det_id}','semanal')">Semanal</button>
+        <button id="btn-{det_id}-tabla-mensual" onclick="verTabla('{det_id}','mensual')">Mensual</button>
+      </div>
+      <div class="table-wrap" style="max-height:420px">
+        <div id="view-{det_id}-tabla-semanal" class="view active">
+          <table id="tabla-{det_id}-semanal" class="sortable">{det_thead_sem}
+          <tbody id="ga-det-tbody-sem-{sfx}"></tbody></table>
+        </div>
+        <div id="view-{det_id}-tabla-mensual" class="view">
+          <table id="tabla-{det_id}-mensual" class="sortable">{det_thead_mes}
+          <tbody id="ga-det-tbody-mes-{sfx}"></tbody></table>
+        </div>
+      </div>
     </div>
   </div>
-
-  <section style="margin-top:26px">
-    <h2>Detalle — total de guías afectadas ({titulo_bloque})</h2>
-    <p class="sub" style="margin-bottom:12px">
-      Resumen fijo de <b>todas</b> las guías afectadas de 2026 (individuales + consolidadas
-      juntas), sin aplicar los filtros de arriba. Total del período: {det_tot}.
-      "Kilos totales" = kilos evaluados de ese período; "% kilos afect." = kilos afectados
-      sobre esos kilos totales; "Clientes afect." = clientes únicos con al menos una guía
-      afectada. La última fila (<b>TOTAL 2026</b>) suma todos los períodos.
-    </p>
-    <div class="toggle">
-      <button id="btn-{det_id}-tabla-semanal" class="active" onclick="verTabla('{det_id}','semanal')">Semanal</button>
-      <button id="btn-{det_id}-tabla-mensual" onclick="verTabla('{det_id}','mensual')">Mensual</button>
-    </div>
-    <div class="table-wrap">
-      <div id="view-{det_id}-tabla-semanal" class="view active">
-        <table id="tabla-{det_id}-semanal" class="sortable">{det_thead_sem}
-        <tbody>{det_tabla_semanal}</tbody></table>
-      </div>
-      <div id="view-{det_id}-tabla-mensual" class="view">
-        <table id="tabla-{det_id}-mensual" class="sortable">{det_thead_mes}
-        <tbody>{det_tabla_mensual}</tbody></table>
-      </div>
-    </div>
-  </section>
 
   <script>
   (function () {{
@@ -2179,6 +2185,7 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     // afectadas; el universo filtrado da el denominador real ("36 de 300").
     var GA_DATOS = {datos_json};
     var GA_MESES_LABEL = {json.dumps({mo: mes_label(mo) for mo in meses_presentes}, ensure_ascii=False)};
+    var GA_SEM_LABEL = {json.dumps(semanas_label, ensure_ascii=False)};
     var gaSort = {{ col: 0, asc: true }};
 
     function gaFmtN(n) {{ return n.toLocaleString('es-CL'); }}
@@ -2323,6 +2330,72 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
       cont.innerHTML = html;
     }}
 
+    // --- Tabla "Detalle — total de guías afectadas" -- ahora se recalcula
+    // con los filtros de la pestaña (pedido de Jorge, 2026-09-07). Agrupa el
+    // universo/afectadas filtrados por mes y por semana del VUELO ESPERADO.
+    function gaColorTol(pct) {{
+      if (pct > 10) return 'var(--bad-dark)';
+      if (pct > 5) return 'var(--bad)';
+      if (pct >= 3) return 'var(--warn)';
+      return 'var(--good)';
+    }}
+    function gaPct1(x) {{ return x.toFixed(1).replace('.', ',') + '%'; }}
+    function gaDetCols(v, esTotal) {{
+      var pct = v.ev ? v.inc / v.ev * 100 : 0;
+      var pctKg = v.kgEv ? v.kg / v.kgEv * 100 : 0;
+      var w = esTotal ? 'font-weight:800' : 'font-weight:700';
+      return "<td data-v='" + v.ev + "'>" + gaFmtN(v.ev) + "</td>" +
+        "<td data-v='" + v.inc + "'>" + gaFmtN(v.inc) + "</td>" +
+        "<td data-v='" + pct.toFixed(1) + "' style='color:" + gaColorTol(pct) + ";" + w + "'>" + gaPct1(pct) + "</td>" +
+        "<td data-v='" + v.kgEv + "'>" + gaFmtKg(v.kgEv) + "</td>" +
+        "<td data-v='" + v.kg + "'>" + gaFmtKg(v.kg) + "</td>" +
+        "<td data-v='" + pctKg.toFixed(1) + "' style='color:" + gaColorTol(pctKg) + ";" + w + "'>" + gaPct1(pctKg) + "</td>" +
+        "<td data-v='" + v.cl + "'>" + gaFmtN(v.cl) + "</td>";
+    }}
+    function gaAgrupar(universo, afectadas, keyFn) {{
+      var m = {{}};
+      function slot(k) {{
+        if (!m[k]) m[k] = {{ ev: 0, inc: 0, kg: 0, kgEv: 0, _cl: {{}} }};
+        return m[k];
+      }}
+      universo.forEach(function (r) {{ var s = slot(keyFn(r)); s.ev += 1; s.kgEv += r.kg; }});
+      afectadas.forEach(function (r) {{ var s = slot(keyFn(r)); s.inc += 1; s.kg += r.kg; s._cl[r.cas] = 1; }});
+      Object.keys(m).forEach(function (k) {{ m[k].cl = Object.keys(m[k]._cl).length; }});
+      return m;
+    }}
+    function gaRenderDetalle(universo, afectadas) {{
+      var porMes = gaAgrupar(universo, afectadas, function (r) {{ return r.mo; }});
+      var porSem = gaAgrupar(universo, afectadas, function (r) {{ return r.sem; }});
+
+      var totCl = {{}};
+      afectadas.forEach(function (r) {{ totCl[r.cas] = 1; }});
+      var tot = {{
+        ev: universo.length,
+        inc: afectadas.length,
+        kg: afectadas.reduce(function (a, r) {{ return a + r.kg; }}, 0),
+        kgEv: universo.reduce(function (a, r) {{ return a + r.kg; }}, 0),
+        cl: Object.keys(totCl).length
+      }};
+
+      var filasMes = Object.keys(porMes).sort().map(function (mo) {{
+        return "<tr><td class='tot-lbl' data-v='" + mo + "'>" + (GA_MESES_LABEL[mo] || mo) +
+          "</td>" + gaDetCols(porMes[mo], false) + "</tr>";
+      }});
+      filasMes.push("<tr class='fila-total'><td class='tot-lbl' data-v='zzz'>TOTAL</td>" + gaDetCols(tot, true) + "</tr>");
+
+      var filasSem = Object.keys(porSem).sort().map(function (s) {{
+        var lbl = GA_SEM_LABEL[s] || [s, s];
+        return "<tr><td data-v='" + lbl[0].replace('W', '') + "'>" + lbl[0] + "</td>" +
+          "<td data-v='" + s + "'>" + lbl[1] + "</td>" + gaDetCols(porSem[s], false) + "</tr>";
+      }});
+      filasSem.push("<tr class='fila-total'><td class='tot-lbl' colspan='2' data-v='zzz'>TOTAL</td>" + gaDetCols(tot, true) + "</tr>");
+
+      document.getElementById('ga-det-tbody-mes-{sfx}').innerHTML = filasMes.join('');
+      document.getElementById('ga-det-tbody-sem-{sfx}').innerHTML = filasSem.join('');
+      document.getElementById('ga-det-tot-{sfx}').textContent =
+        gaFmtDeN(tot.inc, tot.ev) + ' guías · ' + gaFmtDeKg(tot.kg, tot.kgEv) + ' · ' + gaFmtN(tot.cl) + ' clientes';
+    }}
+
     function gaRender() {{
       var res = gaFiltrar();
       var universo = res.universo, afectadas = res.afectadas;
@@ -2333,6 +2406,7 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
       var hmMeses = Object.keys(hmSet).sort();
       gaRenderHeatmap(universo, res.cumplidas, 'mo', 'vdow', 'ga-heatmap-v-{sfx}', hmMeses);
       gaRenderHeatmap(universo, res.cumplidas, 'hmo', 'hdow', 'ga-heatmap-l-{sfx}', hmMeses);
+      gaRenderDetalle(universo, afectadas);
       var col = GA_COLS[gaSort.col];
       afectadas.sort(function (a, b) {{
         var va = a[col], vb = b[col];
