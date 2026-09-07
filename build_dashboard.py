@@ -174,7 +174,30 @@ def barra_svg(items, label_fn, width=980, height=260, bar_gap=6):
     return "".join(svg)
 
 
-def tabla_html(items, label_fn, semanal):
+def _fila_detalle_cols(v, es_total=False):
+    """Las 7 celdas de datos comunes a todas las tablas de detalle:
+    guías evaluadas · guías afectadas · % · kilos totales · kilos afectados ·
+    % kilos · clientes. `v` puede venir de por_mes/por_semana (trae 'pct' y
+    'pct_kilos' ya calculados) o del bloque total (se calculan acá)."""
+    pct = v["pct"] if "pct" in v else (
+        round(v["incidentes"] / v["evaluables"] * 100, 1) if v.get("evaluables") else 0
+    )
+    pct_kg = v["pct_kilos"] if "pct_kilos" in v else (
+        round(v["kilos"] / v["kilos_evaluables"] * 100, 1) if v.get("kilos_evaluables") else 0
+    )
+    peso = "font-weight:800" if es_total else "font-weight:700"
+    return (
+        f"<td data-v='{v['evaluables']}'>{fmt_n(v['evaluables'])}</td>"
+        f"<td data-v='{v['incidentes']}'>{fmt_n(v['incidentes'])}</td>"
+        f"<td data-v='{pct}' style='color:{color_por_pct(pct)};{peso}'>{fmt_pct(pct)}</td>"
+        f"<td data-v='{v['kilos_evaluables']}'>{fmt_kg(v['kilos_evaluables'])}</td>"
+        f"<td data-v='{v['kilos']}'>{fmt_kg(v['kilos'])}</td>"
+        f"<td data-v='{pct_kg}' style='color:{color_por_pct(pct_kg)};{peso}'>{fmt_pct(pct_kg)}</td>"
+        f"<td data-v='{v['clientes']}'>{fmt_n(v['clientes'])}</td>"
+    )
+
+
+def tabla_html(items, label_fn, semanal, totales=None):
     rows = []
     for key, v in items:
         celda_semana = (
@@ -184,14 +207,48 @@ def tabla_html(items, label_fn, semanal):
         rows.append(
             f"<tr>{celda_semana}"
             f"<td data-v='{key}'>{label_fn(key)}</td>"
-            f"<td data-v='{v['evaluables']}'>{fmt_n(v['evaluables'])}</td>"
-            f"<td data-v='{v['incidentes']}'>{fmt_n(v['incidentes'])}</td>"
-            f"<td data-v='{v['pct']}' style='color:{color_por_pct(v['pct'])};font-weight:700'>{fmt_pct(v['pct'])}</td>"
-            f"<td data-v='{v['kilos']}'>{fmt_kg(v['kilos'])}</td>"
-            f"<td data-v='{v['pct_kilos']}' style='color:{color_por_pct(v['pct_kilos'])};font-weight:700'>{fmt_pct(v['pct_kilos'])}</td>"
-            f"<td data-v='{v['clientes']}'>{fmt_n(v['clientes'])}</td></tr>"
+            + _fila_detalle_cols(v) + "</tr>"
+        )
+    if totales:
+        t = {
+            "evaluables": totales["total_evaluables"],
+            "incidentes": totales["total_incidentes"],
+            "kilos": totales["total_kilos"],
+            "kilos_evaluables": totales["total_kilos_evaluables"],
+            "clientes": totales["total_clientes"],
+        }
+        label_cell = (
+            f"<td class='tot-lbl' colspan='2' data-v='2099'>TOTAL 2026</td>"
+            if semanal else
+            f"<td class='tot-lbl' data-v='2099'>TOTAL 2026</td>"
+        )
+        rows.append(
+            f"<tr class='fila-total'>{label_cell}" + _fila_detalle_cols(t, es_total=True) + "</tr>"
         )
     return "\n".join(rows)
+
+
+def thead_detalle(tid, semanal):
+    """<thead> de las tablas de detalle mensual/semanal. Orden de columnas
+    pedido por Jorge (2026-09-07): mes/semana · guías evaluadas · guías
+    afectadas · % · kilos totales · kilos afectados · % kilos · clientes."""
+    if semanal:
+        cols = [
+            ("N° Semana", "num"), ("Semana (lunes)", "str"), ("Guías evaluadas", "num"),
+            ("Guías afectadas", "num"), ("% afect.", "num"), ("Kilos totales", "num"),
+            ("Kilos afectados", "num"), ("% kilos afect.", "num"), ("Clientes afect.", "num"),
+        ]
+    else:
+        cols = [
+            ("Mes", "str"), ("Guías evaluadas", "num"), ("Guías afectadas", "num"),
+            ("% afect.", "num"), ("Kilos totales", "num"), ("Kilos afectados", "num"),
+            ("% kilos afect.", "num"), ("Clientes afect.", "num"),
+        ]
+    ths = "".join(
+        f"<th onclick=\"ordenarTabla('{tid}',{i},'{tipo}')\">{lbl}</th>"
+        for i, (lbl, tipo) in enumerate(cols)
+    )
+    return f"<thead><tr>{ths}</tr></thead>"
 
 
 def ejecutivas_kpis_html(incidentes):
@@ -601,8 +658,8 @@ def build_resumen_ejecutivo():
     pct_est = round(est["total_incidentes"] / est["total_evaluables"] * 100, 1) if est["total_evaluables"] else 0
     pct_sem = round(sem["total_incidentes"] / sem["total_evaluables"] * 100, 1) if sem["total_evaluables"] else 0
 
-    tabla_res_semanal = tabla_html(sorted(b["por_semana"].items()), semana_label, semanal=True)
-    tabla_res_mensual = tabla_html(sorted(b["por_mes"].items()), mes_label, semanal=False)
+    tabla_res_semanal = tabla_html(sorted(b["por_semana"].items()), semana_label, semanal=True, totales=b)
+    tabla_res_mensual = tabla_html(sorted(b["por_mes"].items()), mes_label, semanal=False, totales=b)
 
     return f"""
   <p class="sub">
@@ -654,27 +711,10 @@ def build_resumen_ejecutivo():
     </div>
     <div class="table-wrap">
       <div id="view-resumen-tabla-semanal" class="view active">
-        <table id="tabla-resumen-semanal" class="sortable"><thead><tr>
-          <th onclick="ordenarTabla('tabla-resumen-semanal',0,'num')">N° Semana</th>
-          <th onclick="ordenarTabla('tabla-resumen-semanal',1,'str')">Semana (lunes)</th>
-          <th onclick="ordenarTabla('tabla-resumen-semanal',2,'num')">Guías evaluadas</th>
-          <th onclick="ordenarTabla('tabla-resumen-semanal',3,'num')">Afectadas</th>
-          <th onclick="ordenarTabla('tabla-resumen-semanal',4,'num')">%</th>
-          <th onclick="ordenarTabla('tabla-resumen-semanal',5,'num')">Kilos</th>
-          <th onclick="ordenarTabla('tabla-resumen-semanal',6,'num')">% Kilos</th>
-          <th onclick="ordenarTabla('tabla-resumen-semanal',7,'num')">Clientes</th>
-        </tr></thead><tbody>{tabla_res_semanal}</tbody></table>
+        <table id="tabla-resumen-semanal" class="sortable">{thead_detalle('tabla-resumen-semanal', True)}<tbody>{tabla_res_semanal}</tbody></table>
       </div>
       <div id="view-resumen-tabla-mensual" class="view">
-        <table id="tabla-resumen-mensual" class="sortable"><thead><tr>
-          <th onclick="ordenarTabla('tabla-resumen-mensual',0,'str')">Mes</th>
-          <th onclick="ordenarTabla('tabla-resumen-mensual',1,'num')">Guías evaluadas</th>
-          <th onclick="ordenarTabla('tabla-resumen-mensual',2,'num')">Afectadas</th>
-          <th onclick="ordenarTabla('tabla-resumen-mensual',3,'num')">%</th>
-          <th onclick="ordenarTabla('tabla-resumen-mensual',4,'num')">Kilos</th>
-          <th onclick="ordenarTabla('tabla-resumen-mensual',5,'num')">% Kilos</th>
-          <th onclick="ordenarTabla('tabla-resumen-mensual',6,'num')">Clientes</th>
-        </tr></thead><tbody>{tabla_res_mensual}</tbody></table>
+        <table id="tabla-resumen-mensual" class="sortable">{thead_detalle('tabla-resumen-mensual', False)}<tbody>{tabla_res_mensual}</tbody></table>
       </div>
     </div>
   </section>
@@ -1008,8 +1048,10 @@ def build_seccion(scope, titulo_bloque, subtitulo_bloque, poblacion=None, univer
 
     chart_semanal = barra_svg(semanas, semana_label)
     chart_mensual = barra_svg(meses, mes_label, bar_gap=14)
-    tabla_semanal = tabla_html(semanas, semana_label, semanal=True)
-    tabla_mensual = tabla_html(meses, mes_label, semanal=False)
+    tabla_semanal = tabla_html(semanas, semana_label, semanal=True, totales=bloque)
+    tabla_mensual = tabla_html(meses, mes_label, semanal=False, totales=bloque)
+    thead_sem = thead_detalle(f"tabla-{dom_id}-semanal", True)
+    thead_mes = thead_detalle(f"tabla-{dom_id}-mensual", False)
 
     total_evaluables = universo_evaluables if universo_evaluables is not None else sum(v["evaluables"] for _, v in meses)
     pct_global = round(bloque["total_incidentes"] / total_evaluables * 100, 1) if total_evaluables else 0
@@ -1071,28 +1113,11 @@ def build_seccion(scope, titulo_bloque, subtitulo_bloque, poblacion=None, univer
     </div>
     <div class="table-wrap">
       <div id="view-{dom_id}-tabla-semanal" class="view active">
-        <table id="tabla-{dom_id}-semanal" class="sortable"><thead><tr>
-          <th onclick="ordenarTabla('tabla-{dom_id}-semanal',0,'num')">N° Semana</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-semanal',1,'str')">Semana (lunes)</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-semanal',2,'num')">Guías evaluadas</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-semanal',3,'num')">Afectadas</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-semanal',4,'num')">%</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-semanal',5,'num')">Kilos</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-semanal',6,'num')">% Kilos</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-semanal',7,'num')">Clientes</th>
-        </tr></thead>
+        <table id="tabla-{dom_id}-semanal" class="sortable">{thead_sem}
         <tbody>{tabla_semanal}</tbody></table>
       </div>
       <div id="view-{dom_id}-tabla-mensual" class="view">
-        <table id="tabla-{dom_id}-mensual" class="sortable"><thead><tr>
-          <th onclick="ordenarTabla('tabla-{dom_id}-mensual',0,'str')">Mes</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-mensual',1,'num')">Guías evaluadas</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-mensual',2,'num')">Afectadas</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-mensual',3,'num')">%</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-mensual',4,'num')">Kilos</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-mensual',5,'num')">% Kilos</th>
-          <th onclick="ordenarTabla('tabla-{dom_id}-mensual',6,'num')">Clientes</th>
-        </tr></thead>
+        <table id="tabla-{dom_id}-mensual" class="sortable">{thead_mes}
         <tbody>{tabla_mensual}</tbody></table>
       </div>
     </div>
@@ -1527,15 +1552,15 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
                 # aplica al segundo caso -- se reescriben acá.
                 atr = r.get("atraso_lista_dias")
                 atr_txt = (
-                    f"{atr:.1f} días".replace(".", ",")
-                    if atr is not None else "varios días"
+                    f"{atr:.1f} días hábiles".replace(".", ",")
+                    if atr is not None else "varios días hábiles"
                 )
                 if saltados <= 1:
-                    categoria = "Lista >3 días antes de volar"
+                    categoria = "Lista >3 días hábiles antes de volar"
                     base = "en su vuelo exacto" if saltados == 0 else "saltándose 1 vuelo"
                     motivo = (
                         f"Voló {base}, pero quedó lista {atr_txt} antes de subirse "
-                        f"(tope del criterio: 3 días)."
+                        f"(tope del criterio: 3 días hábiles)."
                     )
                 else:
                     categoria = "Saltó 2+ vuelos"
@@ -1605,7 +1630,7 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     ejecutiva_counts = Counter(r["eje"] for r in afectadas_todas)
     motivo_counts = Counter(r["mot"] for r in afectadas_todas)
     ORDEN_MOTIVOS = (
-        ["Lista >3 días antes de volar", "Saltó 2+ vuelos", "Aún no vuela"]
+        ["Lista >3 días hábiles antes de volar", "Saltó 2+ vuelos", "Aún no vuela"]
         if scope == "margen"
         else ["Saltó 1 vuelo", "Saltó 2 vuelos", "Saltó 3+ vuelos", "Aún no vuela"]
     )
@@ -1678,8 +1703,10 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     # verTabla()/ordenarTabla().
     det_id = f"gadet-{sfx}"
     bloque_total = data[scope]
-    det_tabla_mensual = tabla_html(list(bloque_total["por_mes"].items()), mes_label, semanal=False)
-    det_tabla_semanal = tabla_html(list(bloque_total["por_semana"].items()), semana_label, semanal=True)
+    det_tabla_mensual = tabla_html(list(bloque_total["por_mes"].items()), mes_label, semanal=False, totales=bloque_total)
+    det_tabla_semanal = tabla_html(list(bloque_total["por_semana"].items()), semana_label, semanal=True, totales=bloque_total)
+    det_thead_sem = thead_detalle(f"tabla-{det_id}-semanal", True)
+    det_thead_mes = thead_detalle(f"tabla-{det_id}-mensual", False)
     det_tot = (
         f"{fmt_n(bloque_total['total_incidentes'])} guías afectadas de "
         f"{fmt_n(bloque_total['total_evaluables'])} evaluadas · "
@@ -1793,8 +1820,9 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     <p class="sub" style="margin-bottom:12px">
       Resumen fijo de <b>todas</b> las guías afectadas de 2026 (individuales + consolidadas
       juntas), sin aplicar los filtros de arriba. Total del período: {det_tot}.
-      "% Kilos" = kilos afectados sobre kilos evaluados de ese período; "Clientes" = clientes
-      únicos con al menos una guía afectada.
+      "Kilos totales" = kilos evaluados de ese período; "% kilos afect." = kilos afectados
+      sobre esos kilos totales; "Clientes afect." = clientes únicos con al menos una guía
+      afectada. La última fila (<b>TOTAL 2026</b>) suma todos los períodos.
     </p>
     <div class="toggle">
       <button id="btn-{det_id}-tabla-semanal" class="active" onclick="verTabla('{det_id}','semanal')">Semanal</button>
@@ -1802,28 +1830,11 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
     </div>
     <div class="table-wrap">
       <div id="view-{det_id}-tabla-semanal" class="view active">
-        <table id="tabla-{det_id}-semanal" class="sortable"><thead><tr>
-          <th onclick="ordenarTabla('tabla-{det_id}-semanal',0,'num')">N° Semana</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-semanal',1,'str')">Semana (lunes)</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-semanal',2,'num')">Guías evaluadas</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-semanal',3,'num')">Afectadas</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-semanal',4,'num')">%</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-semanal',5,'num')">Kilos</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-semanal',6,'num')">% Kilos</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-semanal',7,'num')">Clientes</th>
-        </tr></thead>
+        <table id="tabla-{det_id}-semanal" class="sortable">{det_thead_sem}
         <tbody>{det_tabla_semanal}</tbody></table>
       </div>
       <div id="view-{det_id}-tabla-mensual" class="view">
-        <table id="tabla-{det_id}-mensual" class="sortable"><thead><tr>
-          <th onclick="ordenarTabla('tabla-{det_id}-mensual',0,'str')">Mes</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-mensual',1,'num')">Guías evaluadas</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-mensual',2,'num')">Afectadas</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-mensual',3,'num')">%</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-mensual',4,'num')">Kilos</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-mensual',5,'num')">% Kilos</th>
-          <th onclick="ordenarTabla('tabla-{det_id}-mensual',6,'num')">Clientes</th>
-        </tr></thead>
+        <table id="tabla-{det_id}-mensual" class="sortable">{det_thead_mes}
         <tbody>{det_tabla_mensual}</tbody></table>
       </div>
     </div>
@@ -2242,7 +2253,7 @@ seccion_modelo_aduana = build_modelo_aduana()
 seccion_ga_estricto = build_guias_afectadas("estricto", "vuelo exacto", dom_id="ga_estricto")
 seccion_ga_semana = build_guias_afectadas("semana", "misma semana", dom_id="ga_semana")
 seccion_ga_margen = build_guias_afectadas(
-    "margen", "margen 3 días / máx. 1 vuelo saltado", dom_id="ga_margen"
+    "margen", "margen 3 días hábiles / máx. 1 vuelo saltado", dom_id="ga_margen"
 )
 seccion_guias_afectadas = build_wrapper_subtabs(
     "guiasaf",
@@ -2262,12 +2273,13 @@ seccion_guias_afectadas = build_wrapper_subtabs(
             "nunca voló.",
         ),
         (
-            "⏱️", "Margen 3 días / 1 vuelo",
+            "⏱️", "Margen 3 días hábiles / 1 vuelo",
             "No cuenta como afectada solo si cumple LOS DOS topes: voló dentro de 3 días "
-            "desde que quedó lista (pago + factura) <b>y</b> se saltó como máximo 1 vuelo. "
-            "Si incumple cualquiera de los dos, cuenta como afectada — se aplica el tope más "
-            "restrictivo. Ojo: puede marcar guías que volaron en su vuelo exacto pero "
-            "quedaron listas más de 3 días antes (vuelos son 2 por semana).",
+            "hábiles desde que quedó lista (pago + factura; sábado y domingo no cuentan) "
+            "<b>y</b> se saltó como máximo 1 vuelo. Si incumple cualquiera de los dos, cuenta "
+            "como afectada — se aplica el tope más restrictivo. Ojo: puede marcar guías que "
+            "volaron en su vuelo exacto pero quedaron listas más de 3 días hábiles antes "
+            "(vuelos son 2 por semana).",
         ),
         (
             "➕", "Es la suma de las 2 pestañas de población",
@@ -2572,6 +2584,13 @@ HTML = f"""<!DOCTYPE html>
   table.sortable thead th.sorted-asc::after {{ content: " ▲"; font-size: 8px; }}
   table.sortable thead th.sorted-desc::after {{ content: " ▼"; font-size: 8px; }}
   tbody tr:hover {{ background: var(--surface-2); }}
+  tbody tr.fila-total {{ position: sticky; bottom: 0; background: var(--surface); }}
+  tbody tr.fila-total > td {{
+    border-top: 2px solid var(--ink); border-bottom: none;
+    font-weight: 800; font-size: 12.5px; color: var(--ink);
+  }}
+  tbody tr.fila-total:hover {{ background: var(--surface); }}
+  td.tot-lbl {{ text-transform: uppercase; letter-spacing: .04em; font-size: 11px; }}
   .table-wrap {{ max-height: 420px; overflow-y: auto; overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; padding: 0 4px; }}
   .hallazgos {{ display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }}
   .hallazgos .card {{ background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }}
@@ -2668,7 +2687,7 @@ HTML = f"""<!DOCTYPE html>
     una sola en bodega, con un patrón de espera distinto por naturaleza) miden lo mismo con
     los mismos dos criterios ("vuelo exacto" / "misma semana", elegibles adentro de cada una),
     aplicados a cada población por separado; <b>Guías afectadas</b> agrega un tercer criterio
-    ("margen 3 días / 1 vuelo"). El incidente siempre se cuenta en la semana/mes del vuelo que
+    ("margen 3 días hábiles / 1 vuelo"). El incidente siempre se cuenta en la semana/mes del vuelo que
     le correspondía (donde se generó el atraso), no en el que finalmente voló.
   </p>
 
@@ -2833,6 +2852,9 @@ HTML = f"""<!DOCTYPE html>
     var table = document.getElementById(tableId);
     var tbody = table.querySelector('tbody');
     var filas = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+    // La fila de totales (si existe) queda siempre fija al final, no se ordena.
+    var totales = filas.filter(function (tr) {{ return tr.classList.contains('fila-total'); }});
+    filas = filas.filter(function (tr) {{ return !tr.classList.contains('fila-total'); }});
     var ths = table.querySelectorAll('thead th');
     var th = ths[col];
     var asc = th.getAttribute('data-asc') !== 'true';
@@ -2845,6 +2867,7 @@ HTML = f"""<!DOCTYPE html>
       return 0;
     }});
     filas.forEach(function (tr) {{ tbody.appendChild(tr); }});
+    totales.forEach(function (tr) {{ tbody.appendChild(tr); }});
     ths.forEach(function (h) {{ h.removeAttribute('data-asc'); h.classList.remove('sorted-asc', 'sorted-desc'); }});
     th.setAttribute('data-asc', asc ? 'true' : 'false');
     th.classList.add(asc ? 'sorted-asc' : 'sorted-desc');

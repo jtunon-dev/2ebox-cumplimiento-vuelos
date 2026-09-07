@@ -267,8 +267,34 @@ VUELO_LUNES_VIERNES_HORA_MIN = 17   # un vuelo viernes >= 17:00 tambien es "del 
 #       (vuelos_saltados <= 1 => alcanzo su vuelo o el inmediatamente siguiente).
 # Incumplir cualquiera de los dos -> afectada. "La que de menor margen entre
 # ambas opciones combinadas" = se aplica el tope mas restrictivo para cada guia.
+# El tope (A) se mide en DIAS HABILES (Jorge, 2026-09-07): sabados y domingos
+# no cuentan -- una guia que queda lista el viernes en la tarde y vuela el
+# miercoles siguiente lleva ~2,5 dias habiles, no ~4,5 calendario.
 MARGEN_MAX_DIAS = 3
 MARGEN_MAX_VUELOS_SALTADOS = 1
+
+
+def _dias_habiles_transcurridos(inicio, fin):
+    """Dias habiles (lunes a viernes) entre dos datetimes, contando la
+    fraccion horaria de cada dia. Sabado y domingo suman 0. Devuelve un
+    float, negativo si fin < inicio (caso credito: volo antes de quedar
+    lista)."""
+    if fin == inicio:
+        return 0.0
+    signo, a, b = 1, inicio, fin
+    if b < a:
+        signo, a, b = -1, fin, inicio
+    total = 0.0
+    cur = a
+    while cur < b:
+        siguiente_medianoche = (cur + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        tramo_fin = min(siguiente_medianoche, b)
+        if cur.weekday() < 5:  # 0-4 = lun-vie
+            total += (tramo_fin - cur).total_seconds() / 86400
+        cur = tramo_fin
+    return round(signo * total, 1)
 
 
 def noco_fetch_all(table_id, where="", fields="", page_size=1000):
@@ -964,13 +990,13 @@ def main():
         vuelos_saltados = sum(1 for ts in vuelos_ts if esperado_ts <= ts < limite_dt)
         vuelos_saltados_margen = sum(1 for ts in vuelos_ts if esperado_margen_ts <= ts < limite_dt)
 
-        # --- Criterio "margen" (2026-09-03) ---
-        # atraso_lista_dias: dias entre que la guia quedo "lista" y el vuelo en
-        # que realmente volo (None si aun no vuela). Puede ser negativo (caso
-        # credito: volo antes de que el pago quedara registrado).
+        # --- Criterio "margen" (2026-09-03; dias habiles desde 2026-09-07) ---
+        # atraso_lista_dias: dias HABILES entre que la guia quedo "lista" y el
+        # vuelo en que realmente volo (None si aun no vuela). Puede ser negativo
+        # (caso credito: volo antes de que el pago quedara registrado).
         atraso_lista_dias = None
         if real_ts is not None:
-            atraso_lista_dias = round((real_ts - fecha_lista).total_seconds() / 86400, 1)
+            atraso_lista_dias = _dias_habiles_transcurridos(fecha_lista, real_ts)
         _margen_dias_ok = real_ts is not None and atraso_lista_dias <= MARGEN_MAX_DIAS
         _margen_vuelos_ok = real_ts is not None and vuelos_saltados_margen <= MARGEN_MAX_VUELOS_SALTADOS
         no_volo_margen = alcanzo_asignacion and not (_margen_dias_ok and _margen_vuelos_ok)
@@ -1100,7 +1126,7 @@ def main():
     inc_1vuelo = [d for d in detalle if d["no_volo_1vuelo"]]
     print(f"No volaron en su vuelo EXACTO correspondiente: {len(inc_estricto)} ({len(inc_estricto)/len(detalle)*100:.1f}%)")
     print(f"No volaron dentro de la SEMANA de su vuelo correspondiente: {len(inc_semana)} ({len(inc_semana)/len(detalle)*100:.1f}%)")
-    print(f"No cumplen el MARGEN ({MARGEN_MAX_DIAS}d desde lista Y <= {MARGEN_MAX_VUELOS_SALTADOS} vuelo saltado): {len(inc_margen)} ({len(inc_margen)/len(detalle)*100:.1f}%)")
+    print(f"No cumplen el MARGEN ({MARGEN_MAX_DIAS}d habiles desde lista Y <= {MARGEN_MAX_VUELOS_SALTADOS} vuelo saltado): {len(inc_margen)} ({len(inc_margen)/len(detalle)*100:.1f}%)")
     print(f"Se saltaron MAS de {MARGEN_MAX_VUELOS_SALTADOS} vuelo (o no han volado) -- criterio Resumen: {len(inc_1vuelo)} ({len(inc_1vuelo)/len(detalle)*100:.1f}%)")
     _fr = _resumen_friccion_consolidacion(detalle)
     print(
