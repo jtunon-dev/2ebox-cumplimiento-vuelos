@@ -1441,11 +1441,38 @@ def build_conclusiones():
 
     # --- Hallazgo 2: lag de asignacion por mes
     lag = data.get("lag_asignacion_por_mes", {})
+
+    def _hrs_dias(h, habil=False):
+        # "65,8 h · ≈ 2,7 d" -- el equivalente en dias solo se muestra si
+        # supera las 8 h (para menos, "en dias" no aporta).
+        txt = f"{h:.1f} h".replace(".", ",")
+        if h >= 8:
+            dias = f"{h / 24:.1f}".replace(".", ",")
+            et = "d háb." if habil else "d corridos"
+            txt += f" <span style='color:var(--ink-faint)'>· ≈ {dias} {et}</span>"
+        return txt
+
     filas_lag = "".join(
-        f"<tr><td data-v='{mo}'>{mes_label(mo)}</td><td data-v='{v['mediana_horas']}'>{v['mediana_horas']:.1f} h</td>"
-        f"<td data-v='{v['p90_horas']}'>{v['p90_horas']:.1f} h</td></tr>"
+        f"<tr><td data-v='{mo}'>{mes_label(mo)}</td>"
+        f"<td data-v='{v['n']}'>{fmt_n(v['n'])}</td>"
+        f"<td data-v='{v['mediana_horas']}'>{_hrs_dias(v['mediana_horas'])}</td>"
+        f"<td data-v='{v['p90_horas']}'>{_hrs_dias(v['p90_horas'])}</td>"
+        f"<td data-v='{v.get('p90_habil_horas', 0)}'>{_hrs_dias(v.get('p90_habil_horas', 0), habil=True)}</td></tr>"
         for mo, v in sorted(lag.items()) if mo.startswith(str(data["anio_reporte"])) and v["n"] >= 50
     )
+
+    # Split individuales vs guias-bulto de consolidacion en los meses altos
+    # (responde a Jorge, 2026-09-07: "¿estás considerando las consolidaciones?")
+    lag_altos = [v for mo, v in sorted(lag.items())
+                 if mo in ("2026-05", "2026-06", "2026-07", "2026-08")]
+    lag_ind_med = [v["mediana_ind_horas"] for v in lag_altos if v.get("mediana_ind_horas")]
+    lag_cons_med = [v["mediana_cons_horas"] for v in lag_altos if v.get("mediana_cons_horas")]
+    lag_ind_prom = round(sum(lag_ind_med) / len(lag_ind_med), 1) if lag_ind_med else 0
+    lag_cons_prom = round(sum(lag_cons_med) / len(lag_cons_med), 1) if lag_cons_med else 0
+    jul = lag.get("2026-07", {})
+
+    def _h(x):
+        return f"{x:.1f}".replace(".", ",")
 
     # --- Hallazgo 3: individuales vs consolidadas por mes + friccion de consolidacion
     pobl = data["estricto"].get("por_mes_poblacion", {})
@@ -1588,28 +1615,50 @@ def build_conclusiones():
     <p class="sub" style="margin-bottom:14px">
       La tasa de vuelo exacto no es pareja: se dispara en <b>{meses_altos_txt or "los meses de temporada alta"}</b>
       y baja a 0-4% en temporada baja (feb-mar, jun, ago). Sube en paralelo el tiempo que tarda
-      el sistema en asignar una guía a su guía madre: la mediana pasa de <b>&lt;2 horas</b> en
-      temporada baja a <b>4-11,5 horas</b> en {lag_alto_txt or "los meses altos"}. Cuando ese
-      procesamiento se atrasa, la guía queda lista <i>después</i> del corte de manifiesto
-      (víspera 18:00) y pierde su vuelo — no porque no hubiera cupo, sino porque llegó tarde al
-      manifiesto. Lo confirma que casi todas las afectadas se saltan <b>un solo</b> vuelo y
-      enganchan el siguiente.
+      el sistema en asignar una guía a su guía madre desde que quedó lista (pago + factura en
+      Miami): la mediana pasa de <b>&lt;2 horas</b> en temporada baja a <b>4-11,5 horas</b> en
+      {lag_alto_txt or "los meses altos"}. Cuando ese procesamiento se atrasa, la guía queda
+      lista <i>después</i> del corte de manifiesto (víspera 18:00) y pierde su vuelo — no porque
+      no hubiera cupo, sino porque llegó tarde al manifiesto. Lo confirma que casi todas las
+      afectadas se saltan <b>un solo</b> vuelo y enganchan el siguiente.
+    </p>
+    <p class="sub" style="margin-bottom:14px">
+      "P90" = el <b>10% más lento</b> de cada mes (la guía en el percentil 90). Es la cola que
+      pierde el vuelo. Se muestra en horas de reloj (<b>corridas</b>) y también contando solo
+      días hábiles (<b>hábiles</b>: sábado y domingo no suman, día hábil completo de 24 h — no
+      se modela el turno 9-17 porque no hay dato firme de los horarios de la bodega). Aun
+      descontando el fin de semana, en {lag_alto_txt or "los meses altos"} la cola sigue alta.
+      Incluye guías individuales y guías-bulto de consolidación juntas; la fricción propia de
+      consolidación se analiza aparte en el punto 5.
     </p>
     <div class="table-wrap" style="max-height:340px">
       <table id="tabla-lag" class="sortable"><thead><tr>
         <th onclick="ordenarTabla('tabla-lag',0,'str')">Mes</th>
-        <th onclick="ordenarTabla('tabla-lag',1,'num')">Mediana espera asignación</th>
-        <th onclick="ordenarTabla('tabla-lag',2,'num')">P90 espera asignación</th>
+        <th onclick="ordenarTabla('tabla-lag',1,'num')">Guías listas</th>
+        <th onclick="ordenarTabla('tabla-lag',2,'num')">Mediana espera asignación</th>
+        <th onclick="ordenarTabla('tabla-lag',3,'num')">P90 — corridas</th>
+        <th onclick="ordenarTabla('tabla-lag',4,'num')">P90 — hábiles</th>
       </tr></thead><tbody>{filas_lag}</tbody></table>
     </div>
+    <p class="sub" style="margin-top:12px">
+      <b>¿Y las consolidaciones?</b> El atraso NO viene de las guías-bulto. En los meses altos
+      (may-ago) la mediana de asignación de una guía <b>individual</b> es <b>{_h(lag_ind_prom)} h</b>
+      vs solo <b>{_h(lag_cons_prom)} h</b> de una guía de consolidación — las guías-bulto se
+      asignan más rápido porque son una operación planificada y por lotes. En julio la brecha es
+      la más grande: individual <b>{_h(jul.get('mediana_ind_horas', 0))} h</b> de mediana vs
+      <b>{_h(jul.get('mediana_cons_horas', 0))} h</b> la consolidada. El cuello de botella son
+      las <b>guías individuales</b> acumulándose en temporada alta.
+    </p>
     {_decision(
-      "El cuello de botella es <b>capacidad de procesamiento en Miami</b> en los meses de mayor "
-      "volumen, no la parrilla de vuelos. Comprar frecuencia aérea extra no movería la aguja y "
-      "sumaría costo fijo.",
-      "Reforzar la dotación / turnos de armado y asignación de guía madre en Miami en la "
-      "ventana <b>abril-agosto</b> (temporada alta), y adelantar el cierre operativo del "
-      "manifiesto para procesar por lotes antes de las 18:00. Medir el efecto sobre la mediana "
-      "de asignación mes a mes en esta misma tabla.")}
+      "El cuello de botella es la <b>asignación de guías individuales</b> en los meses de mayor "
+      "volumen — no la parrilla de vuelos ni el proceso de consolidación. Y en gran parte es un "
+      "hueco de fin de semana: la cola (P90) baja de ~2-3 días corridos a ~1 día hábil cuando "
+      "se descuenta sábado y domingo. Comprar frecuencia aérea extra no movería la aguja.",
+      "Reforzar la <b>cobertura de asignación de guía madre para guías individuales</b> en la "
+      "ventana <b>abril-agosto</b>, con foco en <b>viernes tarde y fin de semana</b> (turno "
+      "parcial o adelantar el procesamiento del jueves). Adelantar el cierre operativo del "
+      "manifiesto para procesar por lotes antes de las 18:00. Seguir la mediana y el P90 "
+      "hábiles mes a mes en esta tabla para medir el efecto.")}
   </section>
 
   <section>

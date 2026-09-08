@@ -1098,7 +1098,18 @@ def main():
     # --- 2b. Lag de asignacion: horas entre "lista para volar" y
     # fecha_asignado_guia_madre, por mes de fecha_lista. Soporta la
     # conclusion "se alargo el tiempo de asignacion a guia madre".
+    # Se guardan DOS medidas (Jorge, 2026-09-07):
+    #   * "corridas": horas de reloj (24/7) -- es lo que espera la guia y lo
+    #     que determina si alcanza el corte de manifiesto.
+    #   * "habiles": solo lunes-viernes (sabado y domingo no cuentan; dia
+    #     habil completo de 24 h, misma logica que el criterio "margen").
+    #     Aisla la velocidad real de procesamiento del equipo del hueco del
+    #     fin de semana. No se modela el horario de turno (9-17) porque no
+    #     hay dato confirmado de los turnos de la bodega en Miami y el resto
+    #     del reporte trabaja en UTC "pelado".
     lag_por_mes = defaultdict(list)
+    lag_habil_por_mes = defaultdict(list)
+    lag_por_mes_pob = defaultdict(lambda: {"ind": [], "cons": []})
     for g in guias:
         if not g["pago"] or not g["factura"] or not g["asignado"]:
             continue
@@ -1106,17 +1117,37 @@ def main():
         if g["asignado"] < fecha_lista:
             continue  # dato raro (asignado antes de quedar "lista"), se ignora
         lag_horas = (g["asignado"] - fecha_lista).total_seconds() / 3600
+        lag_habil_horas = _dias_habiles_transcurridos(fecha_lista, g["asignado"]) * 24
         mo = f"{fecha_lista.year}-{fecha_lista.month:02d}"
         lag_por_mes[mo].append(lag_horas)
+        lag_habil_por_mes[mo].append(lag_habil_horas)
+        lag_por_mes_pob[mo]["cons" if g["consolidada"] else "ind"].append(lag_horas)
+
+    def _mediana(v):
+        return round(statistics.median(v), 1) if v else 0
+
+    def _p90(v):
+        vs = sorted(v)
+        return round(vs[int(len(vs) * 0.9)], 1) if vs else 0
 
     lag_resumen_por_mes = {}
     for mo, vals in sorted(lag_por_mes.items()):
         vals_sorted = sorted(vals)
+        hab_sorted = sorted(lag_habil_por_mes[mo])
         n = len(vals_sorted)
+        pob = lag_por_mes_pob[mo]
         lag_resumen_por_mes[mo] = {
             "n": n,
-            "mediana_horas": round(statistics.median(vals_sorted), 1),
+            "mediana_horas": _mediana(vals_sorted),
             "p90_horas": round(vals_sorted[int(n * 0.9)], 1) if n else 0,
+            "mediana_habil_horas": _mediana(hab_sorted),
+            "p90_habil_horas": round(hab_sorted[int(n * 0.9)], 1) if n else 0,
+            "n_ind": len(pob["ind"]),
+            "n_cons": len(pob["cons"]),
+            "mediana_ind_horas": _mediana(pob["ind"]),
+            "mediana_cons_horas": _mediana(pob["cons"]),
+            "p90_ind_horas": _p90(pob["ind"]),
+            "p90_cons_horas": _p90(pob["cons"]),
         }
 
     print(f"Guias evaluables (con pago+factura y con vuelo correspondiente ya ocurrido): {len(detalle)}")
