@@ -177,10 +177,11 @@ from collections import defaultdict
 from datetime import datetime, date, timedelta, timezone
 import statistics
 
-# Este repo es PUBLICO (ver README) -- a diferencia de la copia local del
-# script (que si trae un default hardcodeado para comodidad), aqui el token
-# SOLO puede venir del secret de GitHub Actions. Nunca hardcodear el valor
-# real en este archivo.
+# El token vive hardcodeado como default para que correr esto localmente
+# siga funcionando igual que siempre -- pero si hay una variable de entorno
+# NOCO_TOKEN (ej. GitHub Actions Secret en el pipeline automatico diario,
+# 2026-09-02), esa tiene prioridad y el valor real nunca queda commiteado
+# en el repo publico que corre la automatizacion.
 NOCO_TOKEN = os.environ.get("NOCO_TOKEN")
 if not NOCO_TOKEN:
     raise SystemExit(
@@ -578,13 +579,16 @@ def _calcular_benchmarks_aduana(filas_guia_hijas):
 
 
 def _detectar_splits_umbral_aduana(detalle, costo_producto_por_guia, es_empresa_por_guia, usd_por_guia, benchmarks):
-    """Busca pares de guias del MISMO cliente (casilla), listas dentro de
+    """Busca GRUPOS de guias del MISMO cliente (casilla), listas dentro de
     VENTANA_SPLIT_DIAS de diferencia (vuelo_esperado -- proxy de "cuando
-    quedaron disponibles para volar"), que terminaron en guia_madre (AWB)
-    DISTINTO -- candidatas a separacion deliberada por umbral de aduana.
-    Solo cuenta si cada guia por separado queda BAJO el umbral pero
-    SUMADAS lo cruzan (si una ya pasaba el umbral sola, no es un "split",
-    igual iba a pagar)."""
+    quedaron disponibles para volar"), que terminaron repartidas en >= 2
+    guias madre (AWB) DISTINTAS -- candidatas a separacion deliberada por
+    umbral de aduana. El grupo puede ser de 2, 3 o mas guias (Jorge,
+    2026-09-07: "no exactamente 2; las que esperan pueden ser mas de una").
+    Solo cuenta si NINGUNA guia por separado cruza el umbral pero la SUMA
+    del grupo si (si una ya pasaba sola, igual iba a pagar; no es un split).
+    Agrupacion greedy: se ancla en la guia mas antigua sin agrupar y se
+    juntan todas las suyas dentro de la ventana."""
     por_casilla = defaultdict(list)
     for d in detalle:
         ng = str(d["n_guia"])
@@ -606,44 +610,69 @@ def _detectar_splits_umbral_aduana(detalle, costo_producto_por_guia, es_empresa_
     casos = []
     for casilla, gs in por_casilla.items():
         gs.sort(key=lambda g: g["vuelo_esperado"])
-        for i in range(len(gs)):
-            for j in range(i + 1, len(gs)):
-                a, b = gs[i], gs[j]
-                if (b["vuelo_esperado"] - a["vuelo_esperado"]) > ventana:
-                    break  # gs esta ordenado por vuelo_esperado, no hay mas candidatos cercanos
-                if a["awb"] == b["awb"]:
-                    continue  # fueron en el mismo vuelo -- no es un split
-                combinado = a["costo_producto_usd"] + b["costo_producto_usd"]
-                ambos_persona = a["es_empresa"] == 0 and b["es_empresa"] == 0
-                if (ambos_persona and a["costo_producto_usd"] < UMBRAL_AD_VALOREM_USD
-                        and b["costo_producto_usd"] < UMBRAL_AD_VALOREM_USD
-                        and combinado >= UMBRAL_AD_VALOREM_USD):
-                    tipo = "ad_valorem"
-                elif (a["costo_producto_usd"] < UMBRAL_AGENTE_ADUANA_USD
-                        and b["costo_producto_usd"] < UMBRAL_AGENTE_ADUANA_USD
-                        and combinado >= UMBRAL_AGENTE_ADUANA_USD):
-                    tipo = "agente_aduana"
-                else:
+        n = len(gs)
+        usados = [False] * n
+        for i in range(n):
+            if usados[i]:
+                continue
+            idxs = [i]
+            for j in range(i + 1, n):
+                if usados[j]:
                     continue
-                primero, segundo = (a, b) if a["vuelo_real"] <= b["vuelo_real"] else (b, a)
-                usd_prom = (a["usd"] + b["usd"]) / 2
-                if tipo == "ad_valorem":
-                    costo_evitado_clp = round(combinado * usd_prom * benchmarks["tasa_ad_valorem_pct"] / 100)
-                else:
-                    costo_evitado_clp = round(benchmarks["costo_agente_usd"] * usd_prom)
-                casos.append({
-                    "casilla": casilla,
-                    "tipo": tipo,
-                    "n_guia_1": primero["n_guia"],
-                    "n_guia_2": segundo["n_guia"],
-                    "convenio": primero["convenio"] or segundo["convenio"],
-                    "valor_combinado_usd": round(combinado, 1),
-                    "dias_extra_espera": (segundo["vuelo_real"] - primero["vuelo_real"]).days,
-                    "costo_evitado_clp_estimado": costo_evitado_clp,
-                    "vuelo_real_primero": primero["vuelo_real"].isoformat(),
-                    "vuelo_real_segundo": segundo["vuelo_real"].isoformat(),
-                    "afectada_estricto_segundo": segundo["afectada_estricto"],
-                })
+                if (gs[j]["vuelo_esperado"] - gs[i]["vuelo_esperado"]) > ventana:
+                    break  # ordenado por vuelo_esperado, no hay mas cercanos
+                idxs.append(j)
+            grupo = [gs[k] for k in idxs]
+            if len(grupo) < 2:
+                continue
+            awbs = {g["awb"] for g in grupo}
+            if len(awbs) < 2:
+                continue  # ya viajaron todas juntas -- no es un split
+            combinado = sum(g["costo_producto_usd"] for g in grupo)
+            # subtotal por AWB (lo que realmente se declaro en cada vuelo):
+            # el split solo "funciono" si cada vuelo quedo BAJO el umbral.
+            sub_awb = defaultdict(float)
+            for g in grupo:
+                sub_awb[g["awb"]] += g["costo_producto_usd"]
+            max_awb = max(sub_awb.values())
+            todos_persona = all(g["es_empresa"] == 0 for g in grupo)
+            if todos_persona and max_awb < UMBRAL_AD_VALOREM_USD and combinado >= UMBRAL_AD_VALOREM_USD:
+                tipo = "ad_valorem"
+            elif max_awb < UMBRAL_AGENTE_ADUANA_USD and combinado >= UMBRAL_AGENTE_ADUANA_USD:
+                tipo = "agente_aduana"
+            else:
+                continue
+            for k in idxs:
+                usados[k] = True
+            grupo.sort(key=lambda g: g["vuelo_real"])
+            primero, ultimo = grupo[0], grupo[-1]
+            usd_prom = sum(g["usd"] for g in grupo) / len(grupo)
+            if tipo == "ad_valorem":
+                costo_evitado_clp = round(combinado * usd_prom * benchmarks["tasa_ad_valorem_pct"] / 100)
+            else:
+                costo_evitado_clp = round(benchmarks["costo_agente_usd"] * usd_prom)
+            # dias de espera extra acumulados: cada guia que salio despues de
+            # la primera "espero" esos dias de mas (si hubieran salido todas
+            # en el vuelo de la primera).
+            dias_espera_acum = sum(
+                max(0, (g["vuelo_real"] - primero["vuelo_real"]).days) for g in grupo[1:]
+            )
+            casos.append({
+                "casilla": casilla,
+                "tipo": tipo,
+                "n_guias": len(grupo),
+                "n_vuelos": len(awbs),
+                "guias": [g["n_guia"] for g in grupo],
+                "convenio": next((g["convenio"] for g in grupo if g["convenio"]), ""),
+                "valor_combinado_usd": round(combinado, 1),
+                "dias_ventana": (ultimo["vuelo_real"] - primero["vuelo_real"]).days,
+                "dias_espera_acum": dias_espera_acum,
+                "guias_que_esperaron": len(grupo) - 1,
+                "costo_evitado_clp_estimado": costo_evitado_clp,
+                "vuelo_real_primero": primero["vuelo_real"].isoformat(),
+                "vuelo_real_ultimo": ultimo["vuelo_real"].isoformat(),
+                "afectadas_estricto": sum(1 for g in grupo if g["afectada_estricto"]),
+            })
     return casos
 
 
@@ -1183,10 +1212,11 @@ def main():
         f"(n={_benchmarks_aduana['muestra_agente']})"
     )
     print(
-        f"  casos detectados: {len(_casos_aduana)} "
+        f"  grupos detectados: {len(_casos_aduana)} "
         f"({sum(1 for c in _casos_aduana if c['tipo']=='ad_valorem')} ad valorem, "
         f"{sum(1 for c in _casos_aduana if c['tipo']=='agente_aduana')} agente aduana) | "
-        f"de esos, ya marcados 'afectada' en el reporte: {sum(1 for c in _casos_aduana if c['afectada_estricto_segundo'])}"
+        f"{sum(c['n_guias'] for c in _casos_aduana)} guias involucradas | "
+        f"ya marcadas 'afectada' en el reporte: {sum(c['afectadas_estricto'] for c in _casos_aduana)}"
     )
 
     def bloque_definicion(flag_key, poblacion_filtro=None):
