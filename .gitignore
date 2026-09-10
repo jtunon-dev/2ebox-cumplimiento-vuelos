@@ -1,6 +1,12 @@
+# generados por el pipeline — no se commitean
 cumplimiento_vuelos.json
 cumplimiento_vuelos.html
+reporte-logistica-operaciones.html
+reporte-integrado-2ebox.html
+artifact.html
+artifact-integrado.html
+data/
+public/
 __pycache__/
 *.pyc
-public/
 .gstack/
