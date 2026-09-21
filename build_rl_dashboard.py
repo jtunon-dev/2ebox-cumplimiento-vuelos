@@ -218,6 +218,7 @@ table.dt-compact .mx-n{color:var(--ink-faint);font-size:10px;margin-left:3px}
           <button data-x="tarifa" class="on">Tarifa promedio (US$/kg)</button>
           <button data-x="kilos">Kilos promedio (kg/guía)</button>
           <button data-x="kilosvuelo">Kilos promedio por vuelo (kg/AWB)</button>
+          <button data-x="guias">Cantidad de guías</button>
         </div>
         <div class="tbl-scroll"><table class="dt dt-compact" id="perf-matrix"></table></div>
       </div>
@@ -481,7 +482,7 @@ function renderMatrix(){
     if(r[CI.gm_id]) o.vuelos.add(r[CI.gm_id]);
     if(r[CI.costo_est_usd]){ o.costo+=r[CI.costo_est_usd]; o.pesoC+=r[CI.peso_fact]||0; }
   });
-  const M=MXMETRIC;  // "tarifa" | "kilos" | "kilosvuelo"
+  const M=MXMETRIC;  // "tarifa" | "kilos" | "kilosvuelo" | "guias"
   const agg = ks => {
     let peso=0,n=0,costo=0,pesoC=0; const vs=new Set();
     ks.forEach(k=>{const o=acc[k];peso+=o.peso;n+=o.n;costo+=o.costo;pesoC+=o.pesoC;o.vuelos.forEach(x=>vs.add(x));});
@@ -489,9 +490,11 @@ function renderMatrix(){
   };
   const val = a => M==="tarifa"     ? (a.costo && a.pesoC ? a.costo/a.pesoC : null)
                  : M==="kilosvuelo" ? (a.nv ? a.peso/a.nv : null)
+                 : M==="guias"      ? (a.n || null)
                                     : (a.n ? a.peso/a.n : null);
-  const fmtCell = v => v==null ? "–" : (M==="tarifa" ? fmt2(v) : fmt1(v));
-  const subN = a => M==="kilosvuelo" ? a.nv : a.n;   // n mostrado: vuelos o guías
+  const fmt2f = v => v.toLocaleString("es-CL",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const fmtCell = v => v==null ? "–" : (M==="tarifa" ? fmt2f(v) : M==="guias" ? fmtN(v) : fmt1(v));
+  const subN = a => M==="guias" ? 0 : M==="kilosvuelo" ? a.nv : a.n;   // n mostrado: vuelos o guías (guias ya es el valor principal)
 
   const cellVal = k => val(agg([k]));
   const vals=[]; for(const k in acc){const v=cellVal(k); if(v!=null)vals.push(v);}
