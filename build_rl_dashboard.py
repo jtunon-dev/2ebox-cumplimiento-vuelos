@@ -589,7 +589,11 @@ function renderTiempos(){
   const mLbl=meses.map(m=>MESES[m%100-1]+" "+String(Math.floor(m/100)).slice(2));
   newChart("c-total-mes",{type:"line",data:{labels:mLbl,datasets:[{label:"Mediana días",
       data:meses.map(m=>{const v=rows.filter(r=>r[CI.fy]*100+r[CI.fm]===m).map(r=>H2D(r[CI[dk("d_total")]]));return median(v)?+median(v).toFixed(1):null;}),
-      borderColor:"#E3203E",backgroundColor:"rgba(227,32,62,.08)",fill:true,tension:.3,spanGaps:true}]},options:baseOpts});
+      borderColor:"#E3203E",backgroundColor:"rgba(227,32,62,.08)",fill:true,tension:.3,spanGaps:true},
+    {label:"Promedio días",
+      data:meses.map(m=>{const v=rows.filter(r=>r[CI.fy]*100+r[CI.fm]===m).map(r=>H2D(r[CI[dk("d_total")]]));return mean(v)?+mean(v).toFixed(1):null;}),
+      borderColor:"#5691DF",backgroundColor:"rgba(86,145,223,.08)",fill:false,tension:.3,spanGaps:true}]},
+    options:{...baseOpts,plugins:{...baseOpts.plugins,legend:{display:true,position:"bottom"}}}});
 
   const fwT={};
   rows.forEach(r=>{const v=H2D(r[CI[dk("d_total")]]); if(v!=null)(fwT[r[CI.fw]]=fwT[r[CI.fw]]||[]).push(v);});
