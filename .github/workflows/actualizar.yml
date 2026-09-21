@@ -40,16 +40,11 @@ jobs:
       - name: Construir dashboard — cumplimiento de vuelos
         run: python build_dashboard.py
 
-      # --- 2. Rendimiento Logístico (Performance + Análisis de Tiempos + Última Milla) ---
+      # --- 2. Rendimiento Logístico (Performance + Análisis de Tiempos) ---
       - name: Extraer datos — rendimiento logístico
         env:
           NOCO_TOKEN: ${{ secrets.NOCO_TOKEN }}
         run: python extraer_rl.py
-
-      - name: Extraer datos — última milla
-        env:
-          NOCO_TOKEN: ${{ secrets.NOCO_TOKEN }}
-        run: python extraer_ultima_milla.py
 
       - name: Construir dashboard — rendimiento logístico
         run: python build_rl_dashboard.py

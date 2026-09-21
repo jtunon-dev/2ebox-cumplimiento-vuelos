@@ -489,5 +489,128 @@ def main():
     print(f"  anios:      {meta['anios']}")
 
 
+# ============================================================================
+# Última Milla (pestaña "Última Milla" del dashboard) -- corre en el MISMO
+# script/paso de CI que main() (no un extractor aparte) para no tener que
+# tocar el workflow de Actions. Clasifica por courier de última milla
+# (guia_hijas.ultima_milla: 2=DropGo, 1=Bluexpress, resto=sin courier) y
+# calcula el tramo en_despacho -> entregado por guía, con región/comuna.
+# Ver ultima_milla/extraer_ultima_milla.py (carpeta de desarrollo) para el
+# docstring completo de la metodología.
+# ============================================================================
+TBL_GUIA_HIJAS_UM = "m4b0yh4lwpxsvri"
+TBL_HIST_ESTADOS_UM = "mgzgcbyxeu7225b"
+TBL_DIRECCIONES_UM = "m4sgieddhip29md"
+COURIER_UM = {2: "DropGo", 1: "Bluexpress"}
+EST_UM = {18: "en_bodega_cl", 20: "en_despacho", 21: "entregado",
+          26: "reagendado", 28: "entrega_fallida", 29: "enviado_cd"}
+N_GUIA_MIN_UM = 157000          # ~inicio 2026 -- antes no había courier asignado
+
+
+def _a_chile(dt):
+    if dt is None:
+        return None
+    off = -3 if dt.month in (1, 2, 3, 10, 11, 12) else -4  # DST aproximado
+    return dt + timedelta(hours=off)
+
+
+def _dias_calendario_um(a, b):
+    """Días calendario (fecha de b − fecha de a) en hora Chile. 0=same day."""
+    ca, cb = _a_chile(a), _a_chile(b)
+    if ca is None or cb is None:
+        return None
+    d = (cb.date() - ca.date()).days
+    return d if 0 <= d <= 120 else None
+
+
+def extraer_ultima_milla():
+    print("\n=== Última Milla ===")
+    print("[1/3] guia_hijas (entregadas) ...")
+    gh = noco_fetch_all(
+        TBL_GUIA_HIJAS_UM,
+        where=f"(n_guia,gte,{N_GUIA_MIN_UM})~and(id_estado,eq,21)",
+        fields="n_guia,ultima_milla,id_direccion,id_cliente,ancho,alto,largo,peso",
+        label="guia_hijas um",
+    )
+    gmap = {r["n_guia"]: r for r in gh if r.get("n_guia")}
+
+    print("[2/3] direcciones (comuna/región) ...")
+    dir_ids = list({r["id_direccion"] for r in gh if r.get("id_direccion")})
+    dmap = {}
+    for i in range(0, len(dir_ids), 200):
+        lote = dir_ids[i:i + 200]
+        w = "(id,in," + ",".join(str(x) for x in lote) + ")"
+        for r in noco_fetch_all(TBL_DIRECCIONES_UM, where=w, fields="id,comunas,regiones", label=f"dir um {i}"):
+            dmap[r["id"]] = {
+                "comuna": (r.get("comunas") or {}).get("nombre"),
+                "region": (r.get("regiones") or {}).get("nombre"),
+            }
+
+    print("[3/3] historial de estados (última milla) ...")
+    hist = noco_fetch_all(
+        TBL_HIST_ESTADOS_UM,
+        where=f"(id_guia_hija,gte,{N_GUIA_MIN_UM})",
+        fields="id_guia_hija,id_estado,fecha",
+        label="hist um",
+    )
+    por_guia = defaultdict(dict)
+    for h in hist:
+        e = h.get("id_estado")
+        if e not in EST_UM:
+            continue
+        ng = h.get("id_guia_hija")
+        dt = parse_dt(h.get("fecha"))
+        if dt is None:
+            continue
+        k = EST_UM[e]
+        if k not in por_guia[ng] or dt < por_guia[ng][k]:
+            por_guia[ng][k] = dt
+
+    registros = []
+    cnt_courier = Counter()
+    for ng, r in gmap.items():
+        um = r.get("ultima_milla")
+        courier = COURIER_UM.get(um, "Sin courier / otro" if um in (-1, 0) else f"cod {um}")
+        di = dmap.get(r.get("id_direccion"), {})
+        region = di.get("region") or "?"
+        comuna = di.get("comuna") or "?"
+        rm = region == "METROPOLITANA DE SANTIAGO"
+        h = por_guia.get(ng, {})
+        f_desp, f_ent = h.get("en_despacho"), h.get("entregado")
+        ent_dc = _dias_calendario_um(f_desp, f_ent)
+        registros.append({
+            "n_guia": ng,
+            "courier": courier,
+            "region": region,
+            "comuna": comuna,
+            "zona": "RM" if rm else ("?" if region == "?" else "Regiones"),
+            "peso": round(r.get("peso") or 0, 2),
+            "mes": (_a_chile(f_desp) or _a_chile(f_ent)).strftime("%Y-%m") if (f_desp or f_ent) else None,
+            "h_desp_ent": horas(f_desp, f_ent),
+            "dias_desp_ent": ent_dc,
+            "sla": (None if ent_dc is None else
+                    "same_day" if ent_dc == 0 else
+                    "next_day" if ent_dc == 1 else
+                    "d2" if ent_dc == 2 else "d3+"),
+            "reagendado": "reagendado" in h,
+            "entrega_fallida": "entrega_fallida" in h,
+            "f_desp": (f_desp.isoformat() if f_desp else None),
+            "f_ent": (f_ent.isoformat() if f_ent else None),
+        })
+        cnt_courier[courier] += 1
+
+    meta_um = {
+        "generado": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "n_guia_min": N_GUIA_MIN_UM,
+        "n_registros": len(registros),
+        "por_courier": cnt_courier.most_common(),
+    }
+    (OUT / "ultima_milla.json").write_text(
+        json.dumps({"meta": meta_um, "rows": registros}, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8")
+    print(f"\n-> data/ultima_milla.json  ({len(registros)} guías)  por courier: {cnt_courier.most_common()}")
+
+
 if __name__ == "__main__":
     main()
+    extraer_ultima_milla()
