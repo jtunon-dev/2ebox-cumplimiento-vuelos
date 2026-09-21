@@ -271,12 +271,14 @@ def main():
     # El campo 2ebox_rentabilidad.UnidadNegocio esta "mal hecho": no distingue
     # bien Carga. La regla real: todo lo trabajado en la seccion Carga es Carga
     # (aunque no se haya usado bien hasta ahora). Se fuerza por casilla:
-    #   - Reuse (2 cuentas) y Sindal = clientes de Carga.
+    #   - Reuse (2 cuentas), Sindal y Smartdeal = clientes de Carga.
     #   - Netnow es cliente de carga "a veces" pero su caso va SEPARADO -> Netnow.
     #   - CL16504001/2 (Retail Tienda Shopify / Falabella) = Retail.
     CARGA_CASILLAS = {"CL39580000", "CL39580001",  # Servicios Intermediarios Reuse Chile SpA / Jose Tomas Ulloa
                       "CL68910000",                # Sindal (Martin Penna)
-                      "CL42000001", "CL81001000"}  # otras que el campo ya marcaba Carga
+                      "CL42000001", "CL81001000",  # otras que el campo ya marcaba Carga
+                      "CL9251K002"}                 # Smartdeal (info@smartdeal.cl) -- ya no importa (solo 2024),
+                                                     # se mantiene para que sus 9 guias historicas cuenten como Carga
     RETAIL_CASILLAS = {"CL16504001", "CL16504002"}
     NETNOW_CASILLA_EXTRA = {"CL21703000"}          # NET NOW TECNOLOGIA Y COMPUTACION S.A.
     UNIDAD_MAP = {"ML": "Marketplace", "MERCADO": "Marketplace", "SHOPIFY": "Marketplace",
