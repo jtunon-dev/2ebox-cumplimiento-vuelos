@@ -16,11 +16,13 @@ DATA = BASE / "data"
 
 datos = json.loads((DATA / "datos_crudos.json").read_text(encoding="utf-8"))
 meta = json.loads((DATA / "meta.json").read_text(encoding="utf-8"))
+um = json.loads((DATA / "ultima_milla.json").read_text(encoding="utf-8"))
 GEN = datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M UTC")
 
 PAYLOAD = json.dumps({
     "cols": datos["cols"], "rows": datos["rows"], "meta": meta, "generado": GEN,
 }, ensure_ascii=False, separators=(",", ":"))
+PAYLOAD_UM = json.dumps(um, ensure_ascii=False, separators=(",", ":"))
 
 HTML = r"""<!doctype html>
 <html lang="es">
@@ -170,6 +172,7 @@ table.dt-compact .mx-n{color:var(--ink-faint);font-size:10px;margin-left:3px}
     <button class="tab active" data-tab="performance">Performance</button>
     <button class="tab" data-tab="productos">Análisis de Productos</button>
     <button class="tab" data-tab="tiempos">Análisis de Tiempos</button>
+    <button class="tab" data-tab="ultimamilla">Última Milla</button>
   </div>
   <span class="gen" id="gen"></span>
   <button class="theme-toggle" id="theme-toggle-btn" onclick="alternarTemaRL()">🌙 Modo oscuro</button>
@@ -255,12 +258,54 @@ table.dt-compact .mx-n{color:var(--ink-faint);font-size:10px;margin-left:3px}
       </div>
       <div class="panel"><h3>Detalle por tramo del funnel</h3><div class="sub">Días · sobre las guías filtradas</div><div class="tbl-scroll"><table class="dt" id="t-table"></table></div></div>
     </section>
+
+    <section id="tab-ultimamilla" class="hidden">
+      <p class="sub">
+        Tramo despacho en bodega 2ebox Chile → entregado al cliente, por courier de última milla
+        (<code>guia_hijas.ultima_milla</code>: 2 = DropGo, 1 = Bluexpress, resto = sin courier / retiro
+        personal). Solo guías <b>ya entregadas</b>, desde ~inicio de 2026 (antes no había courier
+        asignado en el sistema). No usa los filtros de la izquierda — tiene los suyos propios.
+      </p>
+      <div class="fg" style="margin-bottom:16px">
+        <h4 style="display:flex;justify-content:space-between">Courier <button data-clear="umc">todos</button></h4>
+        <div class="chips" id="f-umc"></div>
+      </div>
+      <div class="kpi-row" id="um-kpis"></div>
+
+      <div class="panel">
+        <h3>Tiempos por mes según courier</h3>
+        <div class="sub">Días calendario despacho → entrega, por mes. Una línea por courier.</div>
+        <div class="metric-switch" id="um-metric">
+          <button data-u="prom" class="on">Promedio</button>
+          <button data-u="mediana">Mediana</button>
+        </div>
+        <div class="chart-box"><canvas id="c-um-mes"></canvas></div>
+      </div>
+
+      <div class="panel">
+        <h3>Matriz por región</h3>
+        <div class="sub">Clic en el encabezado para ordenar · respeta el filtro de courier de arriba</div>
+        <div class="tbl-scroll"><table class="dt" id="um-region-table"></table></div>
+      </div>
+
+      <div class="panel">
+        <h3>RM vs. Regiones (totalizado)</h3>
+        <div class="tbl-scroll"><table class="dt" id="um-zona-table"></table></div>
+      </div>
+
+      <div class="panel">
+        <h3>Matriz por comuna</h3>
+        <div class="sub">Clic en el encabezado para ordenar · respeta el filtro de courier de arriba</div>
+        <div class="tbl-scroll"><table class="dt" id="um-comuna-table"></table></div>
+      </div>
+    </section>
   </main>
 </div>
 
 <script>
 const DB = __PAYLOAD__;
 const CI = {}; DB.cols.forEach((c,i)=>CI[c]=i);
+const UM = __PAYLOAD_UM__;
 const MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 const FW_COLOR = {
   "SKY":"#5691DF","LATAM Cargo":"#E3203E","Trans Caribbean":"#152C4A","Avianca":"#2E9E6B",
@@ -289,8 +334,8 @@ const STAGES = [
 STAGES.forEach(s=>s.lbl=s.de+" → "+s.a);
 const FLUJO_COLOR = {"Cliente / Miami":"#A7C5E1","Miami":"#5691DF","Vuelo":"#E3203E","Internación":"#152C4A","Última milla":"#2E9E6B"};
 
-const F = {fy:new Set(), fm:new Set(), fw:new Set(), un:new Set()};
-let TAB = "performance", PMETRIC = "costo", MXMETRIC = "tarifa", TMETRIC = "corridos";
+const F = {fy:new Set(), fm:new Set(), fw:new Set(), un:new Set(), umc:new Set()};
+let TAB = "performance", PMETRIC = "costo", MXMETRIC = "tarifa", TMETRIC = "corridos", UMMETRIC = "prom";
 const charts = {};
 // key del tramo según toggle corridos/hábiles: "d_xxx" -> "dh_xxx"
 const dk = k => TMETRIC==="habiles" ? k.replace(/^d_/,"dh_") : k;
@@ -301,6 +346,7 @@ DB.rows.forEach(r=>{ if(FW_SMALL.has(r[CI.fw])) r[CI.fw]="Otro"; });
 const YEARS = [...new Set(DB.rows.map(r=>r[CI.fy]))].sort();
 const FWS = DB.meta.forwarders.filter(x=>x[1]>=5).map(x=>x[0]).concat(FW_SMALL.size?["Otro"]:[]);
 const UNS = DB.meta.unidades.map(x=>x[0]);
+const UM_COURIERS = UM.meta.por_courier.map(x=>x[0]);
 
 const H2D = h => h==null ? null : h/24;
 function median(a){const v=a.filter(x=>x!=null).sort((x,y)=>x-y);if(!v.length)return null;const m=v.length>>1;return v.length%2?v[m]:(v[m-1]+v[m])/2;}
@@ -330,6 +376,7 @@ function buildChips(){
   mk(document.getElementById("f-fm"),[1,2,3,4,5,6,7,8,9,10,11,12],"fm",m=>MESES[m-1]);
   mk(document.getElementById("f-fw"),FWS,"fw");
   mk(document.getElementById("f-un"),UNS,"un");
+  mk(document.getElementById("f-umc"),UM_COURIERS,"umc");
 }
 document.querySelectorAll("[data-clear]").forEach(b=>b.onclick=()=>{
   const k=b.dataset.clear;F[k].clear();
@@ -341,7 +388,7 @@ document.getElementById("reset-all").onclick=()=>{
 document.getElementById("tabs").onclick=e=>{
   const b=e.target.closest(".tab");if(!b)return;TAB=b.dataset.tab;
   document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t===b));
-  ["resumen","performance","productos","tiempos"].forEach(t=>
+  ["resumen","performance","productos","tiempos","ultimamilla"].forEach(t=>
     document.getElementById("tab-"+t).classList.toggle("hidden",t!==TAB));
   render();};
 document.getElementById("perf-metric").onclick=e=>{
@@ -356,6 +403,10 @@ document.getElementById("t-metric").onclick=e=>{
   const b=e.target.closest("button");if(!b)return;TMETRIC=b.dataset.t;
   document.querySelectorAll("#t-metric button").forEach(x=>x.classList.toggle("on",x===b));
   renderTiempos();};
+document.getElementById("um-metric").onclick=e=>{
+  const b=e.target.closest("button");if(!b)return;UMMETRIC=b.dataset.u;
+  document.querySelectorAll("#um-metric button").forEach(x=>x.classList.toggle("on",x===b));
+  renderUltimaMilla();};
 
 function newChart(id,cfg){if(charts[id])charts[id].destroy();charts[id]=new Chart(document.getElementById(id),cfg);}
 const baseOpts={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},animation:false};
@@ -459,12 +510,12 @@ function renderPerformance(){
   const ck = useEst?"Costo est.":"Costo real";
   const cH = costoMode ? ["Guías c/costo",ck+" total (US$)","Costo/kg (US$)","Costo/guía (US$)"] : [];
   const cR = x => costoMode ? [fmtN(x.nCosto),x.costo?fmtUSD(x.costo):"–",x.costoKg?fmt2(x.costoKg):"–",x.costoGuia?fmt1(x.costoGuia):"–"] : [];
-  const head=["Forwarder","Vuelos","Guías","Guías/vuelo","Entregadas","% entrega","Kilos","Kilo/vol","Vol/real",...cH,"Tránsito aéreo (d)","Puerta a puerta (d)"];
-  const body=g.map(x=>[x.fw,fmtN(x.nVuelos),fmtN(x.n),x.guiasVuelo?fmt1(x.guiasVuelo):"–",fmtN(x.ent),x.entPct.toFixed(1)+"%",fmtKg(x.peso),fmtKg(x.pesoVol),
+  const head=["Forwarder","Vuelos","Guías","Guías/vuelo","Entregadas","Kilos","Kilo/vol","Vol/real",...cH,"Tránsito aéreo (d)","Puerta a puerta (d)"];
+  const body=g.map(x=>[x.fw,fmtN(x.nVuelos),fmtN(x.n),x.guiasVuelo?fmt1(x.guiasVuelo):"–",fmtN(x.ent),fmtKg(x.peso),fmtKg(x.pesoVol),
     x.volRatio?"×"+fmt2(x.volRatio):"–",...cR(x),
     x.transitMed?fmt1(x.transitMed):"–",x.totalMed?fmt1(x.totalMed):"–"]);
   const cF = costoMode ? [fmtN(rowsCosto.length),totCosto?fmtUSD(totCosto):"–",pesoCosto?fmt2(totCosto/pesoCosto):"–",rowsCosto.length?fmt1(totCosto/rowsCosto.length):"–"] : [];
-  const foot=["Total",fmtN(nVuelos),fmtN(totN),nVuelos?fmt1(totN/nVuelos):"–",fmtN(totEnt),(totN?(totEnt/totN*100).toFixed(1):0)+"%",fmtKg(totPeso),fmtKg(totPesoVol),
+  const foot=["Total",fmtN(nVuelos),fmtN(totN),nVuelos?fmt1(totN/nVuelos):"–",fmtN(totEnt),fmtKg(totPeso),fmtKg(totPesoVol),
     totPeso?"×"+fmt2(totPesoVol/totPeso):"–",...cF,transitAll?fmt1(transitAll):"–",fmt1(p2p)];
   renderTable(T,head,body,foot);
   renderMatrix();
@@ -663,6 +714,67 @@ function renderTable(t,head,body,foot){
   draw();
 }
 
+// --- Última Milla -- dataset propio (UM), NO usa F.fy/fm/fw/un, solo F.umc ---
+function umFiltered(){
+  return UM.rows.filter(r=>!F.umc.size||F.umc.has(r.courier));
+}
+function umAgg(rows){
+  const dias=rows.map(r=>r.dias_desp_ent).filter(x=>x!=null);
+  const kilos=rows.reduce((s,r)=>s+(r.peso||0),0);
+  return {n:rows.length, prom:mean(dias), mediana:median(dias), kilos, kilosProm:rows.length?kilos/rows.length:null};
+}
+function umFmtRow(label,a){
+  return [label, fmtN(a.n), a.prom!=null?fmt1(a.prom)+" d":"–", a.mediana!=null?fmt1(a.mediana)+" d":"–", fmtKg(a.kilos), a.kilosProm!=null?fmt1(a.kilosProm)+" kg":"–"];
+}
+function renderUltimaMilla(){
+  const rows=umFiltered();
+  const tot=umAgg(rows);
+  document.getElementById("um-kpis").innerHTML=[
+    ["Guías entregadas",fmtN(tot.n)],
+    ["Tiempo promedio",tot.prom!=null?fmt1(tot.prom)+" d":"–"],
+    ["Mediana",tot.mediana!=null?fmt1(tot.mediana)+" d":"–"],
+    ["Kilos totales",fmtKg(tot.kilos)],
+    ["Kilos / guía",tot.kilosProm!=null?fmt1(tot.kilosProm)+" kg":"–"],
+  ].map(([l,v])=>`<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+
+  // --- gráfico: tiempos por mes según courier ---
+  const meses=[...new Set(rows.map(r=>r.mes).filter(Boolean))].sort();
+  const couriersPresentes=UM_COURIERS.filter(c=>rows.some(r=>r.courier===c));
+  const COURIER_COLOR={"DropGo":"#E3203E","Bluexpress":"#5691DF","Sin courier / otro":"#7B92A4"};
+  newChart("c-um-mes",{type:"line",data:{labels:meses,datasets:couriersPresentes.map(c=>({
+      label:c,
+      data:meses.map(m=>{
+        const a=umAgg(rows.filter(r=>r.courier===c&&r.mes===m));
+        const v=UMMETRIC==="mediana"?a.mediana:a.prom;
+        return v!=null?+v.toFixed(2):null;
+      }),
+      borderColor:COURIER_COLOR[c]||"#9AAEC2",
+      backgroundColor:(COURIER_COLOR[c]||"#9AAEC2")+"20",
+      fill:false,tension:.3,spanGaps:true}))},
+    options:{...baseOpts,plugins:{...baseOpts.plugins,legend:{display:true,position:"bottom"}}}});
+
+  // --- matriz por región ---
+  const byKey=(rows,key)=>{const g={};rows.forEach(r=>{const k=r[key]||"?";(g[k]=g[k]||[]).push(r);});return g;};
+  const regHead=["Región","Guías","Tiempo promedio","Mediana","Kilos totales","Kilos/guía"];
+  const byRegion=byKey(rows,"region");
+  const regBody=Object.entries(byRegion).map(([k,rs])=>umFmtRow(k,umAgg(rs))).sort((a,b)=>
+    parseFloat(b[1].replace(/\./g,""))-parseFloat(a[1].replace(/\./g,"")));
+  renderTable(document.getElementById("um-region-table"),regHead,regBody,umFmtRow("Total",tot));
+
+  // --- RM vs Regiones (totalizado) ---
+  const byZona=byKey(rows,"zona");
+  const zonaOrder=["RM","Regiones","?"].filter(k=>byZona[k]);
+  const zonaBody=zonaOrder.map(k=>umFmtRow(k==="?"?"Sin región":k,umAgg(byZona[k])));
+  renderTable(document.getElementById("um-zona-table"),regHead,zonaBody,umFmtRow("Total",tot));
+
+  // --- matriz por comuna ---
+  const byComuna=byKey(rows,"comuna");
+  const comHead=["Comuna","Guías","Tiempo promedio","Mediana","Kilos totales","Kilos/guía"];
+  const comBody=Object.entries(byComuna).map(([k,rs])=>umFmtRow(k,umAgg(rs))).sort((a,b)=>
+    parseFloat(b[1].replace(/\./g,""))-parseFloat(a[1].replace(/\./g,"")));
+  renderTable(document.getElementById("um-comuna-table"),comHead,comBody,umFmtRow("Total",tot));
+}
+
 function render(){
   const rows=filtered();
   const m=DB.meta;
@@ -672,6 +784,7 @@ function render(){
     `Fuente: NocoDB 2ebox · ${DB.generado}`;
   if(TAB==="performance")renderPerformance();
   else if(TAB==="tiempos")renderTiempos();
+  else if(TAB==="ultimamilla")renderUltimaMilla();
 }
 
 document.getElementById("gen").textContent="Generado "+DB.generado+" · fuente: NocoDB 2ebox";
@@ -708,7 +821,7 @@ render();
 </html>
 """
 
-out = HTML.replace("__PAYLOAD__", PAYLOAD)
+out = HTML.replace("__PAYLOAD__", PAYLOAD).replace("__PAYLOAD_UM__", PAYLOAD_UM)
 (BASE / "reporte-logistica-operaciones.html").write_text(out, encoding="utf-8")
 print(f"HTML -> reporte-logistica-operaciones.html  ({len(out)//1024} KB)")
 
