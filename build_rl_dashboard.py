@@ -668,7 +668,7 @@ function render(){
   const m=DB.meta;
   document.getElementById("scope-note").innerHTML=
     `<b>${fmtN(rows.length)}</b> / ${fmtN(m.n_registros)} guías con vuelo en el filtro<br>`+
-    `Universo: guías despachadas a aeropuerto, ${m.fecha_desde.slice(0,4)}–hoy, flujo courier (Carga excluida)<br>`+
+    `Universo: guías despachadas a aeropuerto, ${m.fecha_desde.slice(0,4)}–hoy (incluye AWB de carga dedicada)<br>`+
     `Fuente: NocoDB 2ebox · ${DB.generado}`;
   if(TAB==="performance")renderPerformance();
   else if(TAB==="tiempos")renderTiempos();

@@ -15,10 +15,19 @@ Metodologia de costos (confirmado con Jorge, 2026-09-08):
   * peso de la guia (kg). Costo total del forwarder = suma; costo por kilo =
   suma_costo / suma_peso; costo promedio por guia = suma_costo / n_guias.
 
-Unidad de negocio: se cruza reporte_rentabilidad.unidad_negocio por n_guia
-  (valores reales: ML / Casilla / Retail). Las guias sin match quedan como
-  'Casilla'. El flujo de Carga (pallets/AWB propio, ebox_carga_rentabilidad)
-  queda fuera de esta version.
+Unidad de negocio: se cruza 2ebox_rentabilidad.UnidadNegocio por n_guia, con
+  overrides por casilla para Carga/Retail/Netnow (ver clasifica_unidad() mas
+  abajo; confirmado contra la tabla NocoDB "UnidadesNegocio", mw38m5vp1umede0).
+  Las guias sin match quedan como 'Casilla'.
+
+  OJO -- dos cosas distintas se llaman "Carga" en este dominio:
+  (a) guia_madres.tipo_transporte == "CARGA": el AWB del vuelo es de carga
+      dedicada (no de pasajeros/courier). SI se incluye en este reporte desde
+      2026-09-21 -- antes se excluia por completo y dejaba a los clientes de
+      la unidad de negocio Carga (Reuse, Sindal) casi sin guias contadas.
+  (b) el flujo de Carga por PALLETS/OTs propio (tablas ebox_carga_rentabilidad
+      / cargas / ots) -- un sistema totalmente aparte de guia_hijas/guia_madres,
+      que SIGUE fuera de esta version (pendiente, ver docs/SYSTEM_MAP.md).
 
 El token vive hardcodeado como default (mismo criterio que el resto de la
 carpeta); si existe la env var NOCO_TOKEN, tiene prioridad.
@@ -337,13 +346,23 @@ def main():
                 dst[ng] = dt
 
     # --- construir registros por guia ---
-    # Solo guias CON vuelo real (despachadas a aeropuerto) y con guia_madre
-    # resuelta que NO sea CARGA (fuera de alcance v1).
+    # Solo guias CON vuelo real (despachadas a aeropuerto). Antes se excluian
+    # aqui las guias cuyo guia_madre tenia tipo_transporte == "CARGA" (AWB de
+    # carga dedicado) -- eso dejaba a los clientes de la unidad de negocio
+    # "Carga" (Reuse, Sindal, etc.) casi sin guias en el reporte, porque casi
+    # todo lo que mueven vuela en AWB de carga. Jorge confirmo (2026-09-21,
+    # verificado contra guia_madres y la tabla NocoDB UnidadesNegocio: Reuse
+    # / CL39580001 tiene 31 guias con fecha_despachado_aeropuerto en 2026,
+    # todas en AWB tipo_transporte=CARGA) que esas guias SI deben contarse --
+    # el forwarder/tarifa_costo/peso_fact ya se resuelven igual sin importar
+    # el tipo_transporte. Se sigue registrando el tipo en cada fila (ver
+    # "tipo_transporte" mas abajo) para poder filtrar/analizar por separado
+    # si hace falta.
     registros = []
     forwarders_cnt = Counter()
     unidades_cnt = Counter()
     sin_madre = 0
-    carga_excluidas = 0
+    carga_awb = 0
     for g in cumpl:
         ng = str(g.get("n_guia"))
         f_rec = parse_dt(g.get("fecha_recepcion"))
@@ -372,8 +391,7 @@ def main():
             tarifa_costo = 0
         else:
             if madre["tipo_transporte"] == "CARGA":
-                carga_excluidas += 1
-                continue
+                carga_awb += 1
             forwarder = madre["forwarder"]
             tarifa_costo = madre["tarifa_costo"] or 0
 
@@ -443,7 +461,7 @@ def main():
         "n_registros": len(registros),
         "n_vuelos": n_vuelos,
         "n_sin_madre": sin_madre,
-        "n_carga_excluidas": carga_excluidas,
+        "n_carga_awb": carga_awb,
         "cols": COLS,
         "forwarders": forwarders_cnt.most_common(),
         "unidades": unidades_cnt.most_common(),
@@ -459,7 +477,7 @@ def main():
     (OUT / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
 
     print(f"\n{len(registros)} registros -> data/datos_crudos.json")
-    print(f"  sin guia_madre: {sin_madre}  |  carga excluidas: {carga_excluidas}")
+    print(f"  sin guia_madre: {sin_madre}  |  en AWB de carga (incluidas): {carga_awb}")
     print(f"  forwarders: {forwarders_cnt.most_common()}")
     print(f"  unidades:   {unidades_cnt.most_common()}")
     print(f"  anios:      {meta['anios']}")
