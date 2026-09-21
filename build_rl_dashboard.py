@@ -28,6 +28,18 @@ HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Logística y Operaciones 2ebox</title>
+<script>
+  // Igual que Cumplimiento de Vuelos: se aplica ANTES de pintar la pagina
+  // para que no haya parpadeo de tema al recargar (recuerda la eleccion en
+  // localStorage, por navegador). El reporte integrado sobreescribe esto
+  // desde su propio control compartido.
+  (function () {
+    try {
+      var t = localStorage.getItem('rl-tema');
+      if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    } catch (e) {}
+  })();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;600;700&family=Russo+One&display=swap" rel="stylesheet">
@@ -38,9 +50,29 @@ HTML = r"""<!doctype html>
   --2e-blue:#5691DF; --2e-blue-light:#A7C5E1; --2e-blue-dark:#152C4A; --2e-blue-darker:#0D1721;
   --2e-grey:#DFEAF4; --2e-grey-light:#F6FAFD; --2e-grey-dark:#7B92A4;
   --font-display:'Russo One',sans-serif; --font-body:'Fira Sans',sans-serif;
+  --bg:#F6FAFD; --surface:#FFFFFF; --surface-2:#EAF1F7;
+  --ink:#152C4A; --ink-faint:#7B92A4;
+  --line:rgba(21,44,74,0.14);
+  --diag-normal-fill:#EAF1FA; --diag-normal-stroke:#5691DF;
+  --diag-final-fill:#E4F3EA; --diag-final-stroke:#2E9E6B;
+  --diag-branch-fill:#EEF3F9; --diag-branch-stroke:#C9D6E6;
+  --diag-ret-fill:#FFF3E0; --diag-ret-stroke:#E0A100; --diag-ret-ink:#7A5B00;
+}
+/* Modo oscuro (pedido de Jorge, 2026-09-21: controlado desde el banner del
+   reporte integrado, mismos tonos que usa Cumplimiento de Vuelos para que
+   ambos reportes combinen). Solo se remapean fondo/superficie/texto -- los
+   colores de marca (rojo/azul) se mantienen. */
+:root[data-theme="dark"]{
+  --bg:#0D1721; --surface:#13233A; --surface-2:#182B45;
+  --ink:#EFEFEF; --ink-faint:#7B92A4;
+  --line:rgba(167,197,225,0.14);
+  --diag-normal-fill:#16334F; --diag-normal-stroke:#5691DF;
+  --diag-final-fill:#123322; --diag-final-stroke:#34C77A;
+  --diag-branch-fill:#182B45; --diag-branch-stroke:rgba(167,197,225,0.3);
+  --diag-ret-fill:#3A2A05; --diag-ret-stroke:#E0A100; --diag-ret-ink:#F0C674;
 }
 *{box-sizing:border-box}
-body{margin:0;font-family:var(--font-body);color:var(--2e-blue-dark);background:var(--2e-grey-light);font-size:14px}
+body{margin:0;font-family:var(--font-body);color:var(--ink);background:var(--bg);font-size:14px}
 h1,h2,h3,h4{font-family:var(--font-display);font-weight:400;margin:0}
 
 .topbar{background:var(--2e-blue-dark);color:#fff;display:flex;align-items:center;gap:20px;padding:11px 20px;flex-wrap:wrap}
@@ -50,11 +82,15 @@ h1,h2,h3,h4{font-family:var(--font-display);font-weight:400;margin:0}
 .tab{background:transparent;border:none;color:var(--2e-blue-light);font-family:var(--font-display);font-size:12.5px;
   padding:8px 14px;border-radius:8px;cursor:pointer;letter-spacing:.3px}
 .tab:hover{color:#fff;background:rgba(255,255,255,.08)}
-.tab.active{background:var(--2e-grey-light);color:var(--2e-blue-dark)}
+.tab.active{background:var(--surface);color:var(--ink)}
 .gen{font-size:11px;color:var(--2e-blue-light);width:100%;margin-top:1px}
+.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-body);font-size:11.5px;font-weight:600;
+  padding:7px 12px;border:1px solid rgba(255,255,255,.25);border-radius:9px;background:rgba(255,255,255,.08);
+  color:#fff;cursor:pointer;white-space:nowrap}
+.theme-toggle:hover{background:rgba(255,255,255,.16)}
 
 .wrap{display:flex;align-items:flex-start}
-.sidebar{width:240px;flex:none;background:#fff;border-right:1px solid var(--2e-grey);padding:16px 14px;
+.sidebar{width:240px;flex:none;background:var(--surface);border-right:1px solid var(--line);padding:16px 14px;
   position:sticky;top:0;max-height:100vh;overflow-y:auto}
 .main{flex:1;padding:20px 24px;min-width:0}
 
@@ -62,24 +98,24 @@ h1,h2,h3,h4{font-family:var(--font-display);font-weight:400;margin:0}
 .fg h4{font-size:11.5px;letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px;display:flex;justify-content:space-between}
 .fg h4 button{font-family:var(--font-body);font-size:10px;color:var(--2e-blue);background:none;border:none;cursor:pointer;text-transform:none}
 .chips{display:flex;flex-wrap:wrap;gap:5px}
-.chip{border:1px solid var(--2e-grey);background:var(--2e-grey-light);border-radius:8px;padding:4px 9px;font-size:12px;cursor:pointer;user-select:none}
+.chip{border:1px solid var(--line);background:var(--surface-2);border-radius:8px;padding:4px 9px;font-size:12px;cursor:pointer;user-select:none;color:var(--ink)}
 .chip:hover{border-color:var(--2e-blue-light)}
 .chip.on{background:var(--2e-blue);border-color:var(--2e-blue);color:#fff}
 .chip.mes{min-width:36px;text-align:center}
 .reset-all{width:100%;margin-top:2px;background:var(--2e-red);color:#fff;border:none;border-radius:9px;padding:9px;
   font-family:var(--font-display);font-size:11.5px;letter-spacing:.4px;cursor:pointer}
 .reset-all:hover{background:var(--2e-blue-dark)}
-.scope-note{font-size:11px;color:var(--2e-grey-dark);margin-top:10px;line-height:1.55}
+.scope-note{font-size:11px;color:var(--ink-faint);margin-top:10px;line-height:1.55}
 
 .kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:11px;margin-bottom:16px}
-.kpi{background:#fff;border:1px solid var(--2e-grey);border-radius:13px;padding:13px 14px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:13px 14px}
 .kpi .v{font-family:var(--font-display);font-size:22px;line-height:1.15}
-.kpi .l{font-size:11px;color:var(--2e-grey-dark);margin-top:5px;text-transform:uppercase;letter-spacing:.3px}
+.kpi .l{font-size:11px;color:var(--ink-faint);margin-top:5px;text-transform:uppercase;letter-spacing:.3px}
 .kpi .s{font-size:11px;color:var(--2e-blue);margin-top:3px}
 
-.panel{background:#fff;border:1px solid var(--2e-grey);border-radius:13px;padding:15px 16px 13px;margin-bottom:15px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:15px 16px 13px;margin-bottom:15px}
 .panel h3{font-size:13.5px;letter-spacing:.3px;margin-bottom:3px}
-.panel .sub{font-size:11px;color:var(--2e-grey-dark);margin-bottom:11px;line-height:1.5}
+.panel .sub{font-size:11px;color:var(--ink-faint);margin-bottom:11px;line-height:1.5}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:15px}
 .grid-2>.panel{margin-bottom:0}
 @media(max-width:1080px){.grid-2{grid-template-columns:1fr}}
@@ -87,43 +123,43 @@ h1,h2,h3,h4{font-family:var(--font-display);font-weight:400;margin:0}
 .chart-box.tall{height:360px}
 
 .metric-switch{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
-.metric-switch button{border:1px solid var(--2e-grey);background:#fff;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;font-family:var(--font-body)}
+.metric-switch button{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;font-family:var(--font-body)}
 .metric-switch button.on{background:var(--2e-blue-dark);color:#fff;border-color:var(--2e-blue-dark)}
 
 .notice{background:#FFF8E6;border:1px solid #F0D48A;border-radius:10px;padding:9px 12px;font-size:11.5px;color:#7A5B00;margin-bottom:14px;line-height:1.5}
 
 table.dt{width:100%;border-collapse:collapse;font-size:12.5px}
-table.dt th,table.dt td{padding:7px 9px;text-align:right;border-bottom:1px solid var(--2e-grey)}
-table.dt th{font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:.3px;cursor:pointer;white-space:nowrap;background:var(--2e-grey-light)}
+table.dt th,table.dt td{padding:7px 9px;text-align:right;border-bottom:1px solid var(--line)}
+table.dt th{font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:.3px;cursor:pointer;white-space:nowrap;background:var(--surface-2);color:var(--ink)}
 table.dt th:first-child,table.dt td:first-child{text-align:left}
-table.dt tbody tr:hover{background:var(--2e-grey-light)}
-table.dt tfoot td{font-weight:700;border-top:2px solid var(--2e-blue-dark);border-bottom:none}
+table.dt tbody tr:hover{background:var(--surface-2)}
+table.dt tfoot td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none}
 .tbl-scroll{overflow-x:auto}
 /* matriz año×mes: compacta, no estira a todo el ancho */
 table.dt-compact{width:auto;min-width:0;font-size:12px}
 table.dt-compact th,table.dt-compact td{padding:5px 12px;white-space:nowrap}
-table.dt-compact td:first-child,table.dt-compact th:first-child{position:sticky;left:0;background:#fff}
-table.dt-compact th:first-child{background:var(--2e-grey-light)}
-table.dt-compact .mx-n{color:var(--2e-grey-dark);font-size:10px;margin-left:3px}
+table.dt-compact td:first-child,table.dt-compact th:first-child{position:sticky;left:0;background:var(--surface)}
+table.dt-compact th:first-child{background:var(--surface-2)}
+table.dt-compact .mx-n{color:var(--ink-faint);font-size:10px;margin-left:3px}
 
-.placeholder{background:#fff;border:1px dashed var(--2e-blue-light);border-radius:13px;padding:46px 20px;text-align:center;color:var(--2e-grey-dark)}
-.placeholder h3{color:var(--2e-blue-dark);margin-bottom:8px}
+.placeholder{background:var(--surface);border:1px dashed var(--2e-blue-light);border-radius:13px;padding:46px 20px;text-align:center;color:var(--ink-faint)}
+.placeholder h3{color:var(--ink);margin-bottom:8px}
 .hidden{display:none!important}
 
 .fstage{display:flex;align-items:center;gap:10px;margin-bottom:6px;font-size:12px}
 .fstage .lbl{width:240px;flex:none}
-.fstage .track{flex:1;background:var(--2e-grey-light);border-radius:5px;overflow:hidden}
+.fstage .track{flex:1;background:var(--surface-2);border-radius:5px;overflow:hidden}
 .fstage .bar{height:19px;border-radius:5px}
-.fstage .val{width:120px;flex:none;text-align:right;color:var(--2e-grey-dark)}
-.flegend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--2e-grey-dark);margin:10px 0 4px}
+.fstage .val{width:120px;flex:none;text-align:right;color:var(--ink-faint)}
+.flegend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--ink-faint);margin:10px 0 4px}
 .flegend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:middle;background:var(--c)}
 #t-diagram svg{display:block}
 #t-diagram .node rect{rx:9;stroke-width:1.5}
-#t-diagram .node text{font-family:var(--font-body);font-size:11px;fill:var(--2e-blue-dark)}
-#t-diagram .edgelbl{font-family:var(--font-body);font-size:10.5px;font-weight:600;fill:var(--2e-blue-dark)}
-#t-diagram .edgesub{font-family:var(--font-body);font-size:9px;fill:var(--2e-grey-dark)}
-#t-diagram .branch rect{fill:#EEF3F9;stroke:#C9D6E6}
-#t-diagram .branch text{fill:var(--2e-grey-dark)}
+#t-diagram .node text{font-family:var(--font-body);font-size:11px;fill:var(--ink)}
+#t-diagram .edgelbl{font-family:var(--font-body);font-size:10.5px;font-weight:600;fill:var(--ink)}
+#t-diagram .edgesub{font-family:var(--font-body);font-size:9px;fill:var(--ink-faint)}
+#t-diagram .branch rect{fill:var(--surface-2);stroke:var(--line)}
+#t-diagram .branch text{fill:var(--ink-faint)}
 </style>
 </head>
 <body>
@@ -136,6 +172,7 @@ table.dt-compact .mx-n{color:var(--2e-grey-dark);font-size:10px;margin-left:3px}
     <button class="tab" data-tab="tiempos">Análisis de Tiempos</button>
   </div>
   <span class="gen" id="gen"></span>
+  <button class="theme-toggle" id="theme-toggle-btn" onclick="alternarTemaRL()">🌙 Modo oscuro</button>
 </div>
 
 <div class="wrap">
@@ -492,8 +529,8 @@ function renderDiagram(rows, sv){
   };
   const node=(i,txt,cls,y)=>{
     const ls=wrap(txt), yy=y??(midY-nodeH/2);
-    const fill = cls==="branch"?"#EEF3F9":(i===N-1?"#E4F3EA":"#EAF1FA");
-    const stroke = cls==="branch"?"#C9D6E6":(i===N-1?"#2E9E6B":"#5691DF");
+    const fill = cls==="branch"?"var(--diag-branch-fill)":(i===N-1?"var(--diag-final-fill)":"var(--diag-normal-fill)");
+    const stroke = cls==="branch"?"var(--diag-branch-stroke)":(i===N-1?"var(--diag-final-stroke)":"var(--diag-normal-stroke)");
     let t=`<g class="node ${cls||""}"><rect x="${nx(i)}" y="${yy}" width="${W}" height="${nodeH}" rx="9" fill="${fill}" stroke="${stroke}"/>`;
     ls.forEach((l,k)=>t+=`<text x="${ncx(i)}" y="${yy+nodeH/2+(ls.length>1?(k?7:-4):3)}" text-anchor="middle">${l}</text>`);
     return t+"</g>";
@@ -512,14 +549,14 @@ function renderDiagram(rows, sv){
   ESTADOS.forEach((e,i)=>svg+=node(i,e));
   // ramas (sin timing salvo retención)
   const nRet=rows.reduce((a,r)=>a+r[CI.retenida],0), pRet=rows.length?100*nRet/rows.length:0;
-  const branchTop=(i,txt)=>`<line x1="${ncx(i)}" y1="${midY-nodeH/2}" x2="${ncx(i)}" y2="34" stroke="#C9D6E6" stroke-dasharray="3 3"/>`+node(i,txt,"branch",8);
-  const branchBot=(i,txt,y)=>`<line x1="${ncx(i)}" y1="${midY+nodeH/2}" x2="${ncx(i)}" y2="${(y||195)}" stroke="#C9D6E6" stroke-dasharray="3 3"/>`+node(i,txt,"branch",y||195);
+  const branchTop=(i,txt)=>`<line x1="${ncx(i)}" y1="${midY-nodeH/2}" x2="${ncx(i)}" y2="34" stroke="var(--diag-branch-stroke)" stroke-dasharray="3 3"/>`+node(i,txt,"branch",8);
+  const branchBot=(i,txt,y)=>`<line x1="${ncx(i)}" y1="${midY+nodeH/2}" x2="${ncx(i)}" y2="${(y||195)}" stroke="var(--diag-branch-stroke)" stroke-dasharray="3 3"/>`+node(i,txt,"branch",y||195);
   svg+=branchTop(1,"Nula / Restringido / Retiro Miami");
   svg+=branchBot(1,"Solicitud consolidación → Consolidado",196);
-  svg+=`<line x1="${ncx(7)}" y1="${midY+nodeH/2}" x2="${ncx(7)+PITCH/2}" y2="196" stroke="#C9D6E6" stroke-dasharray="3 3"/>`
-      +`<g class="node branch"><rect x="${nx(7)+30}" y="196" width="${W+40}" height="${nodeH}" rx="9" fill="#FFF3E0" stroke="#E0A100"/>`
-      +`<text x="${nx(7)+30+(W+40)/2}" y="216" text-anchor="middle" fill="#7A5B00">En Retención</text>`
-      +`<text x="${nx(7)+30+(W+40)/2}" y="230" text-anchor="middle" fill="#7A5B00" font-size="10">${fmtN(nRet)} guías · ${fmt1(pRet)}%</text></g>`;
+  svg+=`<line x1="${ncx(7)}" y1="${midY+nodeH/2}" x2="${ncx(7)+PITCH/2}" y2="196" stroke="var(--diag-branch-stroke)" stroke-dasharray="3 3"/>`
+      +`<g class="node branch"><rect x="${nx(7)+30}" y="196" width="${W+40}" height="${nodeH}" rx="9" fill="var(--diag-ret-fill)" stroke="var(--diag-ret-stroke)"/>`
+      +`<text x="${nx(7)+30+(W+40)/2}" y="216" text-anchor="middle" fill="var(--diag-ret-ink)">En Retención</text>`
+      +`<text x="${nx(7)+30+(W+40)/2}" y="230" text-anchor="middle" fill="var(--diag-ret-ink)" font-size="10">${fmtN(nRet)} guías · ${fmt1(pRet)}%</text></g>`;
   svg+=branchTop(9,"Entrega Fallida");
   svg+="</svg>";
   document.getElementById("t-diagram").innerHTML=svg;
@@ -635,6 +672,32 @@ function render(){
 }
 
 document.getElementById("gen").textContent="Generado "+DB.generado+" · fuente: NocoDB 2ebox";
+
+// Chart.js no lee variables CSS solo -- hay que fijar los colores de eje/
+// grilla a mano segun el tema activo y reconstruir los graficos (newChart
+// destruye y recrea, asi que basta con volver a llamar render()).
+function chartTextColor(){ return document.documentElement.getAttribute("data-theme")==="dark" ? "#A7C5E1" : "#152C4A"; }
+function chartGridColor(){ return document.documentElement.getAttribute("data-theme")==="dark" ? "rgba(167,197,225,.14)" : "rgba(21,44,74,.10)"; }
+function aplicarTemaGraficos(){
+  Chart.defaults.color = chartTextColor();
+  Chart.defaults.borderColor = chartGridColor();
+  Chart.defaults.scale.grid.color = chartGridColor();
+}
+function actualizarBotonTemaRL(){
+  var oscuro = document.documentElement.getAttribute("data-theme")==="dark";
+  document.getElementById("theme-toggle-btn").textContent = oscuro ? "☀️ Modo claro" : "🌙 Modo oscuro";
+}
+function alternarTemaRL(){
+  var oscuro = document.documentElement.getAttribute("data-theme")==="dark";
+  if(oscuro) document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme","dark");
+  try{ localStorage.setItem("rl-tema", oscuro?"light":"dark"); }catch(e){}
+  actualizarBotonTemaRL();
+  aplicarTemaGraficos();
+  render();
+}
+actualizarBotonTemaRL();
+aplicarTemaGraficos();
 buildChips();
 render();
 </script>

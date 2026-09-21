@@ -40,7 +40,9 @@ RL_HTML = _first(
     BASE / "reporte_logistica_operaciones" / "reporte-logistica-operaciones.html",
 )
 OUT = BASE / "reporte-integrado-2ebox.html"
-GEN = datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M UTC")
+_now = datetime.now(timezone.utc)
+GEN = _now.strftime("%d-%m-%Y %H:%M UTC")
+GEN_ISO = _now.isoformat()
 
 
 def js_string(html_text):
@@ -49,6 +51,10 @@ def js_string(html_text):
 
 
 cumpl = CUMPL_HTML.read_text(encoding="utf-8")
+# el shell ahora trae su propio badge de actualizacion + toggle de tema
+# compartido para los 2 reportes -> se ocultan los de Cumplimiento de Vuelos
+# (siguen existiendo para cuando este reporte se ve standalone).
+cumpl = cumpl.replace("</style>", "#update-badge,#theme-toggle-btn{display:none}</style>", 1)
 
 rl = RL_HTML.read_text(encoding="utf-8")
 # Rendimiento Logístico embebido: por ahora solo Performance + Análisis de
@@ -57,9 +63,10 @@ rl = RL_HTML.read_text(encoding="utf-8")
 # encontrando).
 rl = rl.replace('<button class="tab" data-tab="resumen">Resumen</button>', "")
 rl = rl.replace('<button class="tab" data-tab="productos">Análisis de Productos</button>', "")
-# el shell ya tiene su barra de marca -> en el embed se oculta la marca/fecha
-# de la barra interna del reporte de rendimiento (deja solo las pestañas).
-rl = rl.replace("</style>", ".topbar .brand,.topbar .gen{display:none}.topbar{padding:7px 20px}</style>", 1)
+# el shell ya tiene su barra de marca y su propio badge/toggle compartido ->
+# en el embed se oculta la marca/fecha/toggle de la barra interna de
+# Rendimiento Logístico (deja solo las pestañas).
+rl = rl.replace("</style>", ".topbar .brand,.topbar .gen,#theme-toggle-btn{display:none}.topbar{padding:7px 20px}</style>", 1)
 
 SHELL = r"""<!doctype html>
 <html lang="es">
@@ -81,7 +88,16 @@ body{display:flex;flex-direction:column}
   font-size:12.5px;letter-spacing:.4px;padding:8px 16px;border-radius:8px;cursor:pointer}
 .snav button:hover{color:#fff;background:rgba(255,255,255,.08)}
 .snav button.active{background:var(--2e-grey-light);color:var(--2e-blue-dark)}
-.snav .gen{margin-left:auto;font-size:10.5px;color:var(--2e-blue-light)}
+.snav .right{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.update-badge{display:inline-flex;align-items:center;gap:6px;font-family:'Fira Sans',sans-serif;font-size:11px;font-weight:600;
+  padding:6px 11px;border-radius:9px;border:1px solid rgba(255,255,255,.22);white-space:nowrap;
+  background:rgba(255,255,255,.06);color:var(--2e-blue-light)}
+.update-badge.ok{background:rgba(52,199,122,.16);color:#34C77A;border-color:rgba(52,199,122,.4)}
+.update-badge.stale{background:rgba(227,32,62,.16);color:#FF6B84;border-color:rgba(227,32,62,.4)}
+.theme-toggle{display:inline-flex;align-items:center;gap:6px;font-family:'Fira Sans',sans-serif;font-size:11.5px;font-weight:600;
+  padding:6px 12px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.06);
+  color:#fff;cursor:pointer;white-space:nowrap}
+.theme-toggle:hover{background:rgba(255,255,255,.14)}
 .frames{flex:1;min-height:0;position:relative}
 .frames iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
 .frames iframe[hidden]{display:none}
@@ -92,7 +108,10 @@ body{display:flex;flex-direction:column}
   <span class="brand">2e<b>box</b> · Reporte Logística</span>
   <button data-s="cumpl" class="active">Cumplimiento de Vuelos</button>
   <button data-s="rl">Rendimiento Logístico</button>
-  <span class="gen">Integrado __GEN__</span>
+  <div class="right">
+    <span class="update-badge" id="update-badge">cargando…</span>
+    <button class="theme-toggle" id="theme-toggle-shell" onclick="alternarTemaShell()">🌙 Modo oscuro</button>
+  </div>
 </div>
 <div class="frames">
   <iframe id="f-cumpl" title="Cumplimiento de Vuelos"></iframe>
@@ -101,12 +120,47 @@ body{display:flex;flex-direction:column}
 <script>
 const SRC = { cumpl: __CUMPL__, rl: __RL__ };
 const done = {};
+
+// Tema compartido: un solo control en el shell mueve los 2 iframes (cada
+// reporte por si solo sigue soportando su propio toggle interno cuando se
+// mira standalone -- ver build_dashboard.py / build_rl_dashboard.py). Se
+// fuerza SIEMPRE (nunca se deja "sin atributo") para no heredar una
+// preferencia vieja que haya quedado en localStorage de una visita
+// standalone anterior (mismo origen que el shell -> mismo localStorage).
+let TEMA = "light";
+try { TEMA = localStorage.getItem("integrado-tema") || "light"; } catch (e) {}
+
+function actualizarBotonTemaShell(){
+  document.getElementById("theme-toggle-shell").textContent = TEMA === "dark" ? "☀️ Modo claro" : "🌙 Modo oscuro";
+}
+function aplicarTemaEnFrame(k){
+  if(!done[k]) return; // se inyecta en el srcdoc al cargar -- ver show()
+  const f = document.getElementById("f-"+k);
+  try{
+    f.contentDocument.documentElement.setAttribute("data-theme", TEMA);
+    if(k==="rl" && f.contentWindow.aplicarTemaGraficos){
+      f.contentWindow.aplicarTemaGraficos();
+      f.contentWindow.render();
+    }
+  }catch(e){}
+}
+function alternarTemaShell(){
+  TEMA = TEMA === "dark" ? "light" : "dark";
+  try { localStorage.setItem("integrado-tema", TEMA); } catch (e) {}
+  actualizarBotonTemaShell();
+  ["cumpl","rl"].forEach(aplicarTemaEnFrame);
+}
+
 function show(s){
   if(!(s in SRC)) s = "cumpl";
-  document.querySelectorAll("#snav button").forEach(b=>b.classList.toggle("active", b.dataset.s===s));
+  document.querySelectorAll("#snav button[data-s]").forEach(b=>b.classList.toggle("active", b.dataset.s===s));
   ["cumpl","rl"].forEach(k=>{
     const f = document.getElementById("f-"+k);
-    if(k===s && !done[k]){ f.srcdoc = SRC[k]; done[k] = 1; }
+    if(k===s && !done[k]){
+      const html = SRC[k].replace("</head>", "<script>document.documentElement.setAttribute(\"data-theme\",\"" + TEMA + "\")<\/script></head>");
+      f.srcdoc = html;
+      done[k] = 1;
+    }
     f.hidden = k!==s;
   });
   try{ history.replaceState(null, "", "#"+s); }catch(e){}
@@ -114,14 +168,39 @@ function show(s){
 document.getElementById("snav").addEventListener("click", e=>{
   const b = e.target.closest("button[data-s]"); if(b) show(b.dataset.s);
 });
+actualizarBotonTemaShell();
 show(location.hash.replace("#",""));
+
+// Badge de actualizacion -- mismo criterio que Cumplimiento de Vuelos
+// standalone (verde = hoy, rojo = "hace N dias"), calculado en el
+// navegador para que siga siendo correcto sin importar cuando se mire.
+(function () {
+  var el = document.getElementById("update-badge");
+  var GENERADO_ISO = "__GEN_ISO__";
+  var d = new Date(GENERADO_ISO);
+  if (isNaN(d.getTime())) { el.textContent = "s/d"; return; }
+  var ahora = new Date();
+  var pad = function (n) { return String(n).padStart(2, "0"); };
+  var MESES_CORTOS = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+  var fechaCorta = pad(d.getDate()) + "-" + MESES_CORTOS[d.getMonth()];
+  var hora = pad(d.getHours()) + ":" + pad(d.getMinutes());
+  var esHoy = d.getFullYear() === ahora.getFullYear() && d.getMonth() === ahora.getMonth() && d.getDate() === ahora.getDate();
+  if (esHoy) {
+    el.className = "update-badge ok";
+    el.textContent = "🟢 " + fechaCorta + " " + hora;
+  } else {
+    var dias = Math.max(1, Math.round((ahora - d) / 86400000));
+    el.className = "update-badge stale";
+    el.textContent = "🔴 " + fechaCorta + " " + hora + " (hace " + dias + (dias === 1 ? " día" : " días") + ")";
+  }
+})();
 </script>
 </body>
 </html>
 """
 
 def fill(shell):
-    return (shell.replace("__GEN__", GEN)
+    return (shell.replace("__GEN_ISO__", GEN_ISO)
             .replace("__CUMPL__", js_string(cumpl))
             .replace("__RL__", js_string(rl)))
 
