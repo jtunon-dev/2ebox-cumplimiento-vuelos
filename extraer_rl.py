@@ -33,6 +33,7 @@ El token vive hardcodeado como default (mismo criterio que el resto de la
 carpeta); si existe la env var NOCO_TOKEN, tiene prioridad.
 """
 import json
+import math
 import os
 import re
 import statistics
@@ -401,8 +402,11 @@ def main():
         peso_vol = round(pesovol_por_guia.get(ng) or 0, 2)
         unidad = unidad_por_guia.get(ng, "Casilla")
         # peso de costeo / facturable: Casilla se cobra por kilo REAL; Carga por
-        # el MAYOR entre peso y peso volumetrico (Jorge, 2026-09-09).
-        peso_fact = round(max(peso, peso_vol), 2) if unidad == "Carga" else round(peso, 2)
+        # el MAYOR entre peso y peso volumetrico (Jorge, 2026-09-09), y ese
+        # maximo se factura en KILOS ENTEROS, redondeado HACIA ARRIBA (Jorge,
+        # 2026-09-21 -- ej. guia 167546: peso real 76 kg, peso volumetrico
+        # 148,92 kg -> se cobran 149 kg cerrados, no 148,92).
+        peso_fact = math.ceil(max(peso, peso_vol)) if unidad == "Carga" else round(peso, 2)
         fob = round(fob_por_guia.get(ng) or 0, 1)
         # costo_flete_usd: costo real de flete (guia_madres.tarifa_costo del
         # vuelo, USD/kg x peso facturable). Solo hay tarifa_costo real desde 2025.
