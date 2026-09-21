@@ -15,6 +15,20 @@ Metodologia de costos (confirmado con Jorge, 2026-09-08):
   * peso de la guia (kg). Costo total del forwarder = suma; costo por kilo =
   suma_costo / suma_peso; costo promedio por guia = suma_costo / n_guias.
 
+Metodologia de venta / margen bruto (confirmado con Jorge, 2026-09-21, guia
+  168500 de prueba -- admin muestra "Transporte Internacional" USD 56,43):
+  tarifa de venta por guia, en orden de prioridad:
+  (1) instrucciones_especiales de guia_hijas trae "TARIFA <n>" a mano (USD/kg
+      directo) -- pasa con TODAS las guias de Carga y con algunas Casilla
+      especiales. Manda sobre el calculo de abajo cuando existe.
+  (2) si no: (guia_hijas.valores.RR.transporte_internacional_usd +
+      guia_hijas.valores.HandlingFee convertido a USD via valores.Dolar) /
+      peso de la guia. HandlingFee esta incluido a proposito (Jorge: "esta
+      bien considerarlo").
+  venta_usd (por guia) = tarifa de venta x peso_fact (mismo peso facturable
+  que el costo). Margen bruto = venta_usd - costo_flete_usd (o costo_est_usd
+  con el switch de estimados); margen % = margen / venta_usd.
+
 Unidad de negocio: se cruza 2ebox_rentabilidad.UnidadNegocio por n_guia, con
   overrides por casilla para Carga/Retail/Netnow (ver clasifica_unidad() mas
   abajo; confirmado contra la tabla NocoDB "UnidadesNegocio", mw38m5vp1umede0).
@@ -52,6 +66,7 @@ NOCO_URL = "https://noco.2ebox.com/api/v1/db/data/noco"
 TBL_CUMPLIMIENTO = "m4feao7xeudu8k9"
 TBL_GUIA_MADRES = "m5t0y2pg3d0qt7h"
 TBL_GUIA_MADRE_HIJAS = "mpwefzshqgun0m7"   # tabla puente M2M (system)
+TBL_GUIA_HIJAS = "m4b0yh4lwpxsvri"          # para venta (valores JSON + Instrucciones)
 # 2ebox_rentabilidad: 1 fila por guia (mismo universo que ebox_cumplimiento,
 # ~58k filas), trae NGuia / UnidadNegocio / Peso y responde rapido por la API
 # (el "reporte_rentabilidad" es una vista pesada: ~10s por pagina, no sirve).
@@ -312,6 +327,76 @@ def main():
         if r.get("VolumenInternacional"):
             pesovol_por_guia[ng] = r["VolumenInternacional"]
 
+    # 3b. guia_hijas: venta (para el margen bruto = venta - costo del vuelo).
+    # Confirmado con Jorge (2026-09-21) contra la guia 168500 (Casilla, sin
+    # nota en Instrucciones): el admin muestra "Transporte Internacional"
+    # USD 56,43 = valores.RR.transporte_internacional_usd (51,14) +
+    # valores.HandlingFee convertido a USD (5.000 CLP / valores.Dolar). Ese
+    # total / peso = tarifa de venta USD/kg.
+    #   - Para guias de CARGA (y algunas Casilla especiales, Jorge) el valor
+    #     de venta real esta anotado a mano en instrucciones_especiales como
+    #     "TARIFA <numero>" (USD/kg directo, ya no hay que dividir por peso)
+    #     -- ese dato MANDA por sobre el calculo de guia_hijas.valores.
+    print("[3b/5] guia_hijas (venta para margen) ...")
+    gh_venta = noco_fetch_all(
+        TBL_GUIA_HIJAS,
+        fields="n_guia,valores,instrucciones_especiales",
+        label="guia_hijas venta",
+    )
+    _tarifa_re = re.compile(r"tarifa\s*\$?\s*(\d+[.,]?\d*)", re.IGNORECASE)
+
+    def _tarifa_de_instrucciones(texto):
+        if not texto:
+            return None
+        m = _tarifa_re.search(texto)
+        if not m:
+            return None
+        try:
+            v = float(m.group(1).replace(",", "."))
+        except ValueError:
+            return None
+        return v if 0 < v < 50 else None  # USD/kg razonable; descarta matches espurios
+
+    venta_kg_por_guia, venta_fuente_por_guia = {}, {}
+    for r in gh_venta:
+        ng = r.get("n_guia")
+        if ng is None:
+            continue
+        ng = str(ng)
+        v_instr = _tarifa_de_instrucciones(r.get("instrucciones_especiales"))
+        if v_instr is not None:
+            venta_kg_por_guia[ng] = v_instr
+            venta_fuente_por_guia[ng] = "instrucciones"
+            continue
+        raw = r.get("valores")
+        if not raw:
+            continue
+        try:
+            val = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(val, dict):
+            continue
+        rr = val.get("RR") or {}
+        if not isinstance(rr, dict):
+            rr = {}
+
+        def _num(x):
+            try:
+                return float(x)
+            except (TypeError, ValueError):
+                return 0
+
+        transp_usd = _num(rr.get("transporte_internacional_usd")) or _num(val.get("TarifaUsd"))
+        dolar = _num(val.get("Dolar"))
+        handling_clp = _num(val.get("HandlingFee")) or _num(rr.get("handling_fee"))
+        handling_usd = (handling_clp / dolar) if dolar else 0
+        total_usd = transp_usd + handling_usd
+        peso_g = peso_por_guia.get(ng) or 0
+        if total_usd and peso_g:
+            venta_kg_por_guia[ng] = total_usd / peso_g
+            venta_fuente_por_guia[ng] = "calculado"
+
     # 4. ebox_cumplimiento: timestamps del funnel (2023 -> hoy)
     print("[4/5] ebox_cumplimiento (funnel de tiempos) ...")
     # NOTA: en ebox_cumplimiento las columnas fecha_en_retencion y
@@ -419,6 +504,10 @@ def main():
         costo_flete_usd = round(tarifa_costo * peso_fact, 2) if (tarifa_costo and peso_fact) else 0
         costo_est_usd = round(tarifa_est * peso_fact, 2) if (tarifa_est and peso_fact) else 0
         costo_estimado = 1 if (costo_est_usd and not costo_flete_usd) else 0
+        # venta_usd: tarifa de venta (instrucciones o calculada, ver bloque 3b) x
+        # peso facturable. Margen bruto = venta_usd - costo_flete_usd (o costo_est_usd).
+        tarifa_venta = venta_kg_por_guia.get(ng) or 0
+        venta_usd = round(tarifa_venta * peso_fact, 2) if (tarifa_venta and peso_fact) else 0
 
         # tramos del funnel -- estados reales del flujo Casilla 2ebox.
         # Se guarda cada tramo en 2 versiones: dias CORRIDOS (horas) y dias
@@ -444,7 +533,7 @@ def main():
             1 if f_ent else 0,                 # entregada
             1 if f_ret else 0,                 # paso por retencion
             round(peso, 2), peso_vol, peso_fact, fob,
-            costo_flete_usd, costo_est_usd, costo_estimado,
+            costo_flete_usd, costo_est_usd, costo_estimado, venta_usd,
         ] + d_corr + d_hab)
         forwarders_cnt[forwarder] += 1
         unidades_cnt[unidad] += 1
@@ -453,7 +542,7 @@ def main():
           "desp_arr", "arr_adu", "adu_bod", "bod_dch", "dch_ent", "total"]
     COLS = ["fy", "fm", "fw", "un", "gm_id", "entregada", "retenida",
             "peso", "peso_vol", "peso_fact", "fob_usd",
-            "costo_flete_usd", "costo_est_usd", "costo_estimado"] \
+            "costo_flete_usd", "costo_est_usd", "costo_estimado", "venta_usd"] \
         + ["d_" + t for t in _T] + ["dh_" + t for t in _T]
 
     ci = {c: i for i, c in enumerate(COLS)}
@@ -461,6 +550,7 @@ def main():
     n_vuelos = len({r[ci["gm_id"]] for r in registros if r[ci["gm_id"]]})
     con_costo = Counter(r[ci["fy"]] for r in registros if r[ci["costo_flete_usd"]])
     con_costo_est = Counter(r[ci["fy"]] for r in registros if r[ci["costo_est_usd"]])
+    con_venta = Counter(r[ci["fy"]] for r in registros if r[ci["venta_usd"]])
     meta = {
         "generado": ahora.isoformat(timespec="seconds"),
         "fecha_desde": FECHA_DESDE,
@@ -475,6 +565,7 @@ def main():
         "por_anio": dict(sorted(por_anio.items())),
         "cobertura_costo": dict(sorted(con_costo.items())),
         "cobertura_costo_est": dict(sorted(con_costo_est.items())),
+        "cobertura_venta": dict(sorted(con_venta.items())),
     }
 
     (OUT / "datos_crudos.json").write_text(
@@ -487,6 +578,8 @@ def main():
     print(f"  forwarders: {forwarders_cnt.most_common()}")
     print(f"  unidades:   {unidades_cnt.most_common()}")
     print(f"  anios:      {meta['anios']}")
+    print(f"  cobertura venta: {meta['cobertura_venta']}  "
+          f"(fuentes: {Counter(venta_fuente_por_guia.values()).most_common()})")
 
 
 # ============================================================================

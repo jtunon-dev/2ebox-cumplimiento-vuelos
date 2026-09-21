@@ -416,10 +416,14 @@ function byForwarder(rows, CK){
   const g={};
   rows.forEach(r=>{
     const k=r[CI.fw];
-    (g[k]||(g[k]={fw:k,n:0,ent:0,peso:0,pesoVol:0,costo:0,nCosto:0,pesoCosto:0,vuelos:new Set(),transit:[],total:[]}));
+    (g[k]||(g[k]={fw:k,n:0,ent:0,peso:0,pesoVol:0,costo:0,nCosto:0,pesoCosto:0,venta:0,costoMg:0,nMg:0,vuelos:new Set(),transit:[],total:[]}));
     const o=g[k];o.n++;o.ent+=r[CI.entregada];o.peso+=r[CI.peso]||0;o.pesoVol+=r[CI.peso_vol]||0;
     if(r[CI.gm_id])o.vuelos.add(r[CI.gm_id]);
-    if(CK!=null && r[CK]){o.costo+=r[CK];o.nCosto++;o.pesoCosto+=r[CI.peso_fact]||0;}  // peso_fact = billable (Carga)
+    if(CK!=null && r[CK]){
+      o.costo+=r[CK];o.nCosto++;o.pesoCosto+=r[CI.peso_fact]||0;  // peso_fact = billable (Carga)
+      // margen: solo guias con costo Y venta calzados (no diluir con ceros fantasma)
+      if(r[CI.venta_usd]){o.venta+=r[CI.venta_usd];o.costoMg+=r[CK];o.nMg++;}
+    }
     if(r[CI.d_desp_arr]!=null)o.transit.push(H2D(r[CI.d_desp_arr]));
     if(r[CI.d_total]!=null)o.total.push(H2D(r[CI.d_total]));
   });
@@ -427,6 +431,8 @@ function byForwarder(rows, CK){
     entPct:o.n?o.ent/o.n*100:0, transitMed:median(o.transit), totalMed:median(o.total),
     volRatio:o.peso?o.pesoVol/o.peso:null, guiasVuelo:o.vuelos.size?o.n/o.vuelos.size:null,
     costoKg:o.pesoCosto?o.costo/o.pesoCosto:null, costoGuia:o.nCosto?o.costo/o.nCosto:null,
+    margenUsd:o.nMg?o.venta-o.costoMg:null, margenPct:o.venta?(o.venta-o.costoMg)/o.venta*100:null,
+    margenGuia:o.nMg?(o.venta-o.costoMg)/o.nMg:null,
   })).sort((a,b)=>b.n-a.n);
 }
 
@@ -443,6 +449,10 @@ function renderPerformance(){
   const totCosto=rowsCosto.reduce((s,r)=>s+r[CK],0);
   const pesoCosto=rowsCosto.reduce((s,r)=>s+(r[CI.peso_fact]||0),0);  // peso facturable
   const nEstReal = rows.filter(r=>r[CI.costo_estimado]).length;
+  const rowsMg = costoMode ? rowsCosto.filter(r=>r[CI.venta_usd]) : [];
+  const totVenta=rowsMg.reduce((s,r)=>s+r[CI.venta_usd],0);
+  const totCostoMg=rowsMg.reduce((s,r)=>s+r[CK],0);
+  const totMargen=totVenta-totCostoMg;
   const nVuelos = new Set(rows.filter(r=>r[CI.gm_id]).map(r=>r[CI.gm_id])).size;
   const transitAll=median(rows.map(r=>H2D(r[CI.d_desp_arr])));
   const p2p=median(rows.map(r=>H2D(r[CI.d_total])));
@@ -459,6 +469,9 @@ function renderPerformance(){
       : `<b>Costo real.</b> Solo guías cuyo vuelo tiene <code>tarifa_costo</code> cargada en NocoDB (desde 2025). `+
         `Filtro actual: <b>${fmtN(rowsCosto.length)}</b> guías con costo real, de ${fmtN(totN)}. `+
         `Probá "Costo con estimados" para rellenar 2025 con la tarifa del mismo forwarder.`;
+    nt.innerHTML += ` <b>Margen:</b> venta = <code>instrucciones_especiales</code> ("TARIFA") si existe, si no `+
+      `(transporte internacional + handling) ÷ peso, ambos de <code>guia_hijas</code>. Solo se calcula donde hay `+
+      `costo Y venta calzados: <b>${fmtN(rowsMg.length)}</b> guías de ${fmtN(rowsCosto.length)} con costo.`;
   } else nt.classList.add("hidden");
 
   const kpis = costoMode ? [
@@ -468,6 +481,9 @@ function renderPerformance(){
     ["Costo promedio por guía",fmtUSD(rowsCosto.length?totCosto/rowsCosto.length:null)],
     ["Costo por kilo",pesoCosto?"US$"+fmt2(totCosto/pesoCosto):"–"],
     ["Kilo/vol vs real",totPeso?"×"+fmt2(totPesoVol/totPeso):"–","peso volumétrico ÷ peso real"],
+    ["Margen bruto total",rowsMg.length?fmtUSD(totMargen):"–",fmtN(rowsMg.length)+" guías con venta"],
+    ["Margen %",totVenta?fmt1(totMargen/totVenta*100)+"%":"–"],
+    ["Margen promedio por guía",rowsMg.length?fmtUSD(totMargen/rowsMg.length):"–"],
   ] : [
     ["Vuelos (AWB)",fmtN(nVuelos),nVuelos?fmt1(totN/nVuelos)+" guías/vuelo":""],
     ["Guías transportadas",fmtN(totN)],
@@ -508,13 +524,15 @@ function renderPerformance(){
 
   const T=document.getElementById("perf-table");
   const ck = useEst?"Costo est.":"Costo real";
-  const cH = costoMode ? ["Guías c/costo",ck+" total (US$)","Costo/kg (US$)","Costo/guía (US$)"] : [];
-  const cR = x => costoMode ? [fmtN(x.nCosto),x.costo?fmtUSD(x.costo):"–",x.costoKg?fmt2(x.costoKg):"–",x.costoGuia?fmt1(x.costoGuia):"–"] : [];
+  const cH = costoMode ? ["Guías c/costo",ck+" total (US$)","Costo/kg (US$)","Costo/guía (US$)","Venta (US$)","Margen (US$)","Margen %"] : [];
+  const cR = x => costoMode ? [fmtN(x.nCosto),x.costo?fmtUSD(x.costo):"–",x.costoKg?fmt2(x.costoKg):"–",x.costoGuia?fmt1(x.costoGuia):"–",
+    x.venta?fmtUSD(x.venta):"–",x.margenUsd!=null?fmtUSD(x.margenUsd):"–",x.margenPct!=null?fmt1(x.margenPct)+"%":"–"] : [];
   const head=["Forwarder","Vuelos","Guías","Guías/vuelo","Entregadas","Kilos","Kilo/vol","Vol/real",...cH,"Tránsito aéreo (d)","Puerta a puerta (d)"];
   const body=g.map(x=>[x.fw,fmtN(x.nVuelos),fmtN(x.n),x.guiasVuelo?fmt1(x.guiasVuelo):"–",fmtN(x.ent),fmtKg(x.peso),fmtKg(x.pesoVol),
     x.volRatio?"×"+fmt2(x.volRatio):"–",...cR(x),
     x.transitMed?fmt1(x.transitMed):"–",x.totalMed?fmt1(x.totalMed):"–"]);
-  const cF = costoMode ? [fmtN(rowsCosto.length),totCosto?fmtUSD(totCosto):"–",pesoCosto?fmt2(totCosto/pesoCosto):"–",rowsCosto.length?fmt1(totCosto/rowsCosto.length):"–"] : [];
+  const cF = costoMode ? [fmtN(rowsCosto.length),totCosto?fmtUSD(totCosto):"–",pesoCosto?fmt2(totCosto/pesoCosto):"–",rowsCosto.length?fmt1(totCosto/rowsCosto.length):"–",
+    totVenta?fmtUSD(totVenta):"–",rowsMg.length?fmtUSD(totMargen):"–",totVenta?fmt1(totMargen/totVenta*100)+"%":"–"] : [];
   const foot=["Total",fmtN(nVuelos),fmtN(totN),nVuelos?fmt1(totN/nVuelos):"–",fmtN(totEnt),fmtKg(totPeso),fmtKg(totPesoVol),
     totPeso?"×"+fmt2(totPesoVol/totPeso):"–",...cF,transitAll?fmt1(transitAll):"–",fmt1(p2p)];
   renderTable(T,head,body,foot);
