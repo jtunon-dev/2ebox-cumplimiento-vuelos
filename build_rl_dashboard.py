@@ -214,16 +214,28 @@ table.dt-compact .mx-n{color:var(--ink-faint);font-size:10px;margin-left:3px}
         <div class="panel"><h3>Tiempo de tránsito aéreo por forwarder</h3><div class="sub">Días · mediana de (arribo a Chile − despacho a aeropuerto)</div><div class="chart-box"><canvas id="c-transito"></canvas></div></div>
       </div>
       <div class="panel"><h3>Detalle por forwarder</h3><div class="sub">Clic en el encabezado para ordenar</div><div class="tbl-scroll"><table class="dt" id="perf-table"></table></div></div>
-      <div class="panel">
-        <h3>Matriz año × mes</h3>
-        <div class="sub">Filas = mes, columnas = año. El número chico gris es la cantidad de guías (o de vuelos, en "kg/AWB"). Respeta forwarder y unidad de negocio, no año/mes. Tarifa = costo ÷ kilos facturables con costo (solo desde 2025). Carga se costea por peso volumétrico; Casilla por kilo real.</div>
-        <div class="metric-switch" id="mx-metric">
-          <button data-x="tarifa" class="on">Tarifa promedio (US$/kg)</button>
-          <button data-x="kilos">Kilos promedio (kg/guía)</button>
-          <button data-x="kilosvuelo">Kilos promedio por vuelo (kg/AWB)</button>
-          <button data-x="guias">Cantidad de guías</button>
+      <div class="grid-2">
+        <div class="panel">
+          <h3>Matriz año × mes</h3>
+          <div class="sub">Filas = mes, columnas = año. El número chico gris es la cantidad de guías (o de vuelos, en "kg/AWB"). Respeta forwarder y unidad de negocio, no año/mes. Tarifa = costo ÷ kilos facturables con costo (solo desde 2025). Carga se costea por peso volumétrico; Casilla por kilo real.</div>
+          <div class="metric-switch" id="mx-metric">
+            <button data-x="tarifa" class="on">Tarifa promedio (US$/kg)</button>
+            <button data-x="kilos">Kilos promedio (kg/guía)</button>
+            <button data-x="kilosvuelo">Kilos promedio por vuelo (kg/AWB)</button>
+            <button data-x="guias">Cantidad de guías</button>
+          </div>
+          <div class="tbl-scroll"><table class="dt dt-compact" id="perf-matrix"></table></div>
         </div>
-        <div class="tbl-scroll"><table class="dt dt-compact" id="perf-matrix"></table></div>
+        <div class="panel">
+          <h3>Matriz año × mes — margen</h3>
+          <div class="sub">Mismo criterio que la matriz de tarifa. Solo guías con costo Y venta calzados (ver nota de margen arriba). El número chico gris es la cantidad de guías (o de vuelos, en "por vuelo").</div>
+          <div class="metric-switch" id="mg-metric">
+            <button data-g="vuelo" class="on">Margen promedio por vuelo</button>
+            <button data-g="guia">Margen promedio por guía</button>
+            <button data-g="total">Margen total</button>
+          </div>
+          <div class="tbl-scroll"><table class="dt dt-compact" id="perf-matrix-margen"></table></div>
+        </div>
       </div>
     </section>
 
@@ -335,7 +347,7 @@ STAGES.forEach(s=>s.lbl=s.de+" → "+s.a);
 const FLUJO_COLOR = {"Cliente / Miami":"#A7C5E1","Miami":"#5691DF","Vuelo":"#E3203E","Internación":"#152C4A","Última milla":"#2E9E6B"};
 
 const F = {fy:new Set(), fm:new Set(), fw:new Set(), un:new Set(), umc:new Set()};
-let TAB = "performance", PMETRIC = "costo", MXMETRIC = "tarifa", TMETRIC = "corridos", UMMETRIC = "prom";
+let TAB = "performance", PMETRIC = "costo", MXMETRIC = "tarifa", MGMETRIC = "vuelo", TMETRIC = "corridos", UMMETRIC = "prom";
 const charts = {};
 // key del tramo según toggle corridos/hábiles: "d_xxx" -> "dh_xxx"
 const dk = k => TMETRIC==="habiles" ? k.replace(/^d_/,"dh_") : k;
@@ -399,6 +411,10 @@ document.getElementById("mx-metric").onclick=e=>{
   const b=e.target.closest("button");if(!b)return;MXMETRIC=b.dataset.x;
   document.querySelectorAll("#mx-metric button").forEach(x=>x.classList.toggle("on",x===b));
   renderMatrix();};
+document.getElementById("mg-metric").onclick=e=>{
+  const b=e.target.closest("button");if(!b)return;MGMETRIC=b.dataset.g;
+  document.querySelectorAll("#mg-metric button").forEach(x=>x.classList.toggle("on",x===b));
+  renderMatrixMargen();};
 document.getElementById("t-metric").onclick=e=>{
   const b=e.target.closest("button");if(!b)return;TMETRIC=b.dataset.t;
   document.querySelectorAll("#t-metric button").forEach(x=>x.classList.toggle("on",x===b));
@@ -537,6 +553,7 @@ function renderPerformance(){
     totPeso?"×"+fmt2(totPesoVol/totPeso):"–",...cF,transitAll?fmt1(transitAll):"–",fmt1(p2p)];
   renderTable(T,head,body,foot);
   renderMatrix();
+  renderMatrixMargen();
 }
 
 // Matriz año x mes — respeta filtros de forwarder y unidad (no año/mes)
@@ -574,6 +591,58 @@ function renderMatrix(){
 
   const T=document.getElementById("perf-matrix");
   const unit = M==="kilosvuelo" ? "kg/AWB" : "";
+  let html=`<thead><tr><th>Mes</th>`+years.map(y=>`<th>${y}</th>`).join("")+`<th>Todos</th></tr></thead><tbody>`;
+  for(let m=1;m<=12;m++){
+    html+=`<tr><td>${MESES[m-1]}</td>`;
+    years.forEach(y=>{const a=agg([y+"-"+m]); const v=val(a);
+      html+=`<td style="${bg(v)}">${fmtCell(v)}${cnt(subN(a))}</td>`;});
+    const ra=agg(years.map(y=>y+"-"+m));
+    html+=`<td><b>${fmtCell(val(ra))}</b>${cnt(subN(ra))}</td></tr>`;
+  }
+  html+=`<tr><td><b>Todos</b></td>`;
+  years.forEach(y=>{ const a=agg(Array.from({length:12},(_,i)=>y+"-"+(i+1)));
+    html+=`<td><b>${fmtCell(val(a))}</b>${cnt(subN(a))}</td>`;});
+  html+=`<td><b>${fmtCell(val(agg(Object.keys(acc))))}</b></td></tr></tbody>`;
+  T.innerHTML=html;
+}
+
+// Matriz año x mes — margen (venta - costo). Igual criterio que renderMatrix
+// pero solo suma filas con costo Y venta calzados (mismo par usado en
+// byForwarder/KPIs de margen), asi que costo aca es costo_est_usd (no el
+// costo_flete_usd real puro) para no perder cobertura fuera de 2025-2026.
+function renderMatrixMargen(){
+  const rows=DB.rows.filter(r=>(!F.fw.size||F.fw.has(r[CI.fw])) && (!F.un.size||F.un.has(r[CI.un])));
+  const years=YEARS;
+  const acc={};
+  years.forEach(y=>{for(let m=1;m<=12;m++)acc[y+"-"+m]={venta:0,costo:0,n:0,vuelos:new Set()};});
+  rows.forEach(r=>{
+    const o=acc[r[CI.fy]+"-"+r[CI.fm]]; if(!o)return;
+    if(r[CI.costo_est_usd] && r[CI.venta_usd]){
+      o.venta+=r[CI.venta_usd]; o.costo+=r[CI.costo_est_usd]; o.n++;
+      if(r[CI.gm_id]) o.vuelos.add(r[CI.gm_id]);
+    }
+  });
+  const M=MGMETRIC;  // "vuelo" | "guia" | "total"
+  const agg = ks => {
+    let venta=0,costo=0,n=0; const vs=new Set();
+    ks.forEach(k=>{const o=acc[k];venta+=o.venta;costo+=o.costo;n+=o.n;o.vuelos.forEach(x=>vs.add(x));});
+    return {venta,costo,n,nv:vs.size,margen:venta-costo};
+  };
+  const val = a => !a.n ? null
+                 : M==="vuelo" ? (a.nv ? a.margen/a.nv : null)
+                 : M==="guia"  ? a.margen/a.n
+                               : a.margen;
+  const fmtCell = v => v==null ? "–" : fmtUSD(v);
+  const subN = a => M==="vuelo" ? a.nv : a.n;
+
+  const cellVal = k => val(agg([k]));
+  const vals=[]; for(const k in acc){const v=cellVal(k); if(v!=null)vals.push(v);}
+  const lo=Math.min(...vals), hi=Math.max(...vals);
+  const bg=v=>{ if(v==null||hi===lo)return ""; const t=(v-lo)/(hi-lo);
+    return `background:rgba(86,145,223,${(0.06+t*0.4).toFixed(2)})`; };
+  const cnt=x=> x?`<span class="mx-n">· ${fmtN(x)}</span>`:"";
+
+  const T=document.getElementById("perf-matrix-margen");
   let html=`<thead><tr><th>Mes</th>`+years.map(y=>`<th>${y}</th>`).join("")+`<th>Todos</th></tr></thead><tbody>`;
   for(let m=1;m<=12;m++){
     html+=`<tr><td>${MESES[m-1]}</td>`;
