@@ -485,6 +485,8 @@ def main():
 
         # periodo de referencia = mes del vuelo (despacho a aeropuerto)
         fy, fm = f_desp.year, f_desp.month
+        # semana = lunes de la semana del despacho (para "kilos por semana", Jorge 2026-09-22)
+        semana = (f_desp - timedelta(days=f_desp.weekday())).strftime("%Y-%m-%d")
         peso = peso_por_guia.get(ng) or 0
         peso_vol = round(pesovol_por_guia.get(ng) or 0, 2)
         unidad = unidad_por_guia.get(ng, "Casilla")
@@ -533,7 +535,7 @@ def main():
             1 if f_ent else 0,                 # entregada
             1 if f_ret else 0,                 # paso por retencion
             round(peso, 2), peso_vol, peso_fact, fob,
-            costo_flete_usd, costo_est_usd, costo_estimado, venta_usd,
+            costo_flete_usd, costo_est_usd, costo_estimado, venta_usd, semana,
         ] + d_corr + d_hab)
         forwarders_cnt[forwarder] += 1
         unidades_cnt[unidad] += 1
@@ -542,7 +544,7 @@ def main():
           "desp_arr", "arr_adu", "adu_bod", "bod_dch", "dch_ent", "total"]
     COLS = ["fy", "fm", "fw", "un", "gm_id", "entregada", "retenida",
             "peso", "peso_vol", "peso_fact", "fob_usd",
-            "costo_flete_usd", "costo_est_usd", "costo_estimado", "venta_usd"] \
+            "costo_flete_usd", "costo_est_usd", "costo_estimado", "venta_usd", "semana"] \
         + ["d_" + t for t in _T] + ["dh_" + t for t in _T]
 
     ci = {c: i for i, c in enumerate(COLS)}

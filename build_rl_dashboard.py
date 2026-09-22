@@ -237,6 +237,11 @@ table.dt-compact .mx-n{color:var(--ink-faint);font-size:10px;margin-left:3px}
           <div class="tbl-scroll"><table class="dt dt-compact" id="perf-matrix-margen"></table></div>
         </div>
       </div>
+      <div class="panel">
+        <h3>Kilos volados por semana</h3>
+        <div class="sub">Semana = lunes de despacho a aeropuerto. Clic en el encabezado para ordenar (por defecto, cronológico). Respeta todos los filtros de la izquierda.</div>
+        <div class="tbl-scroll" style="max-height:420px;overflow-y:auto"><table class="dt" id="perf-semanas"></table></div>
+      </div>
     </section>
 
     <section id="tab-productos" class="hidden">
@@ -554,6 +559,27 @@ function renderPerformance(){
   renderTable(T,head,body,foot);
   renderMatrix();
   renderMatrixMargen();
+  renderSemanas(rows);
+}
+
+// Kilos volados por semana -- respeta TODOS los filtros (fy/fm/fw/un), a
+// diferencia de las matrices de arriba (que ignoran fy/fm a propósito).
+function renderSemanas(rows){
+  const g={};
+  rows.forEach(r=>{
+    const wk=r[CI.semana]; if(!wk) return;
+    (g[wk]||(g[wk]={peso:0,n:0,vuelos:new Set()}));
+    g[wk].peso+=r[CI.peso]||0; g[wk].n++;
+    if(r[CI.gm_id]) g[wk].vuelos.add(r[CI.gm_id]);
+  });
+  const weeks=Object.keys(g).sort();
+  const head=["Semana","Vuelos","Guías","Kilos","Kilos/guía"];
+  const body=weeks.map(wk=>{const o=g[wk];
+    return [wk, fmtN(o.vuelos.size), fmtN(o.n), fmtKg(o.peso), o.n?fmt1(o.peso/o.n):"–"];});
+  const totPeso=weeks.reduce((s,wk)=>s+g[wk].peso,0), totN=weeks.reduce((s,wk)=>s+g[wk].n,0);
+  const totVuelos=new Set(); weeks.forEach(wk=>g[wk].vuelos.forEach(v=>totVuelos.add(v)));
+  const foot=["Total", fmtN(totVuelos.size), fmtN(totN), fmtKg(totPeso), totN?fmt1(totPeso/totN):"–"];
+  renderTable(document.getElementById("perf-semanas"), head, body, foot);
 }
 
 // Matriz año x mes — respeta filtros de forwarder y unidad (no año/mes)
