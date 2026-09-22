@@ -29,6 +29,11 @@ Metodologia de venta / margen bruto (confirmado con Jorge, 2026-09-21, guia
   que el costo). Margen bruto = venta_usd - costo_flete_usd (o costo_est_usd
   con el switch de estimados); margen % = margen / venta_usd.
 
+  EXCEPCION Retail/Marketplace (Shopify, Falabella, Mercado Libre): el flete
+  se vende A COSTO -- el margen real de estas unidades se verifica en la
+  tienda, no por vuelo (Jorge, 2026-09-22). venta_usd se fuerza = costo_est_usd
+  para esas 2 unidades (margen 0 en ambos modos de costo).
+
 Unidad de negocio: se cruza 2ebox_rentabilidad.UnidadNegocio por n_guia, con
   overrides por casilla para Carga/Retail/Netnow (ver clasifica_unidad() mas
   abajo; confirmado contra la tabla NocoDB "UnidadesNegocio", mw38m5vp1umede0).
@@ -510,6 +515,13 @@ def main():
         # peso facturable. Margen bruto = venta_usd - costo_flete_usd (o costo_est_usd).
         tarifa_venta = venta_kg_por_guia.get(ng) or 0
         venta_usd = round(tarifa_venta * peso_fact, 2) if (tarifa_venta and peso_fact) else 0
+        # Retail/Marketplace (Shopify, Falabella, Mercado Libre): el flete
+        # internacional se vende A COSTO -- el margen real de estas unidades
+        # se verifica directo en la tienda, no por vuelo (Jorge, 2026-09-22).
+        # venta_usd = costo_est_usd (no costo_flete_usd) para que el margen
+        # quede en 0 en los 2 modos de costo (real Y estimado) por igual.
+        if unidad in ("Retail", "Marketplace"):
+            venta_usd = costo_est_usd
 
         # tramos del funnel -- estados reales del flujo Casilla 2ebox.
         # Se guarda cada tramo en 2 versiones: dias CORRIDOS (horas) y dias

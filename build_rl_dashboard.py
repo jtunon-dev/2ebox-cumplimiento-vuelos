@@ -357,11 +357,11 @@ const charts = {};
 // key del tramo según toggle corridos/hábiles: "d_xxx" -> "dh_xxx"
 const dk = k => TMETRIC==="habiles" ? k.replace(/^d_/,"dh_") : k;
 
-// forwarders con muy pocas guias historicas -> se pliegan como "Otro"
-const FW_SMALL = new Set(DB.meta.forwarders.filter(x=>x[1]<5).map(x=>x[0]));
-DB.rows.forEach(r=>{ if(FW_SMALL.has(r[CI.fw])) r[CI.fw]="Otro"; });
+// todos los forwarders reales aparecen sueltos (Jorge, 2026-09-22) -- antes
+// los de <5 guias se plegaban en "Otro", pero eso escondia forwarders reales
+// como DHL.
 const YEARS = [...new Set(DB.rows.map(r=>r[CI.fy]))].sort();
-const FWS = DB.meta.forwarders.filter(x=>x[1]>=5).map(x=>x[0]).concat(FW_SMALL.size?["Otro"]:[]);
+const FWS = DB.meta.forwarders.map(x=>x[0]);
 const UNS = DB.meta.unidades.map(x=>x[0]);
 const UM_COURIERS = UM.meta.por_courier.map(x=>x[0]);
 
