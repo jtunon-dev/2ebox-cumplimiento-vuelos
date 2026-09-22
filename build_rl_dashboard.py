@@ -227,12 +227,16 @@ table.dt-compact .mx-n{color:var(--ink-faint);font-size:10px;margin-left:3px}
           <div class="tbl-scroll"><table class="dt dt-compact" id="perf-matrix"></table></div>
         </div>
         <div class="panel">
-          <h3>Matriz año × mes — margen</h3>
+          <h3>Matriz año × mes — margen / venta</h3>
           <div class="sub">Mismo criterio que la matriz de tarifa. Solo guías con costo Y venta calzados (ver nota de margen arriba). El número chico gris es la cantidad de guías (o de vuelos, en "por vuelo").</div>
+          <div class="metric-switch" id="mg-valor">
+            <button data-v="margen" class="on">Margen</button>
+            <button data-v="venta">Venta</button>
+          </div>
           <div class="metric-switch" id="mg-metric">
-            <button data-g="vuelo" class="on">Margen promedio por vuelo</button>
-            <button data-g="guia">Margen promedio por guía</button>
-            <button data-g="total">Margen total</button>
+            <button data-g="vuelo" class="on">Promedio por vuelo</button>
+            <button data-g="guia">Promedio por guía</button>
+            <button data-g="total">Total</button>
           </div>
           <div class="tbl-scroll"><table class="dt dt-compact" id="perf-matrix-margen"></table></div>
         </div>
@@ -352,7 +356,7 @@ STAGES.forEach(s=>s.lbl=s.de+" → "+s.a);
 const FLUJO_COLOR = {"Cliente / Miami":"#A7C5E1","Miami":"#5691DF","Vuelo":"#E3203E","Internación":"#152C4A","Última milla":"#2E9E6B"};
 
 const F = {fy:new Set(), fm:new Set(), fw:new Set(), un:new Set(), umc:new Set()};
-let TAB = "performance", PMETRIC = "costo", MXMETRIC = "tarifa", MGMETRIC = "vuelo", TMETRIC = "corridos", UMMETRIC = "prom";
+let TAB = "performance", PMETRIC = "costo", MXMETRIC = "tarifa", MGMETRIC = "vuelo", MGVALUE = "margen", TMETRIC = "corridos", UMMETRIC = "prom";
 const charts = {};
 // key del tramo según toggle corridos/hábiles: "d_xxx" -> "dh_xxx"
 const dk = k => TMETRIC==="habiles" ? k.replace(/^d_/,"dh_") : k;
@@ -419,6 +423,10 @@ document.getElementById("mx-metric").onclick=e=>{
 document.getElementById("mg-metric").onclick=e=>{
   const b=e.target.closest("button");if(!b)return;MGMETRIC=b.dataset.g;
   document.querySelectorAll("#mg-metric button").forEach(x=>x.classList.toggle("on",x===b));
+  renderMatrixMargen();};
+document.getElementById("mg-valor").onclick=e=>{
+  const b=e.target.closest("button");if(!b)return;MGVALUE=b.dataset.v;
+  document.querySelectorAll("#mg-valor button").forEach(x=>x.classList.toggle("on",x===b));
   renderMatrixMargen();};
 document.getElementById("t-metric").onclick=e=>{
   const b=e.target.closest("button");if(!b)return;TMETRIC=b.dataset.t;
@@ -648,16 +656,20 @@ function renderMatrixMargen(){
       if(r[CI.gm_id]) o.vuelos.add(r[CI.gm_id]);
     }
   });
-  const M=MGMETRIC;  // "vuelo" | "guia" | "total"
+  const M=MGMETRIC;    // "vuelo" | "guia" | "total"
+  const V=MGVALUE;     // "margen" | "venta"
   const agg = ks => {
     let venta=0,costo=0,n=0; const vs=new Set();
     ks.forEach(k=>{const o=acc[k];venta+=o.venta;costo+=o.costo;n+=o.n;o.vuelos.forEach(x=>vs.add(x));});
     return {venta,costo,n,nv:vs.size,margen:venta-costo};
   };
-  const val = a => !a.n ? null
-                 : M==="vuelo" ? (a.nv ? a.margen/a.nv : null)
-                 : M==="guia"  ? a.margen/a.n
-                               : a.margen;
+  const val = a => {
+    if(!a.n) return null;
+    const base = V==="venta" ? a.venta : a.margen;
+    return M==="vuelo" ? (a.nv ? base/a.nv : null)
+         : M==="guia"  ? base/a.n
+                        : base;
+  };
   const fmtCell = v => v==null ? "–" : fmtUSD(v);
   const subN = a => M==="vuelo" ? a.nv : a.n;
 
