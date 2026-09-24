@@ -23,6 +23,18 @@ PAYLOAD = json.dumps({
     "cols": datos["cols"], "rows": datos["rows"], "meta": meta, "generado": GEN,
 }, ensure_ascii=False, separators=(",", ":"))
 PAYLOAD_UM = json.dumps(um, ensure_ascii=False, separators=(",", ":"))
+# Llenado de Vuelos (extraer_llenado.py) -- opcional: si el extractor no corrió,
+# la pestaña queda vacía con un aviso en vez de romper el build completo.
+_ll_path = DATA / "llenado_vuelos.json"
+ll = json.loads(_ll_path.read_text(encoding="utf-8")) if _ll_path.exists() else {"vuelos": [], "guias": []}
+# las guías ya subidas a un AWB no usan los campos de T5 (pendientes) -> fuera, para
+# no inflar el HTML (el reporte integrado embebe este archivo completo)
+_SOLO_T5 = ("cif", "ag", "adv", "desc", "mcf", "pag", "ex", "cli", "fob_cart", "tramo", "regla", "p", "cli_hist")
+for _g in ll["guias"]:
+    if _g.get("vid"):
+        for _k in _SOLO_T5:
+            _g.pop(_k, None)
+PAYLOAD_LL = json.dumps(ll, ensure_ascii=False, separators=(",", ":"))
 
 HTML = r"""<!doctype html>
 <html lang="es">
@@ -162,6 +174,32 @@ table.dt-compact .mx-n{color:var(--ink-faint);font-size:10px;margin-left:3px}
 #t-diagram .edgesub{font-family:var(--font-body);font-size:9px;fill:var(--ink-faint)}
 #t-diagram .branch rect{fill:var(--surface-2);stroke:var(--line)}
 #t-diagram .branch text{fill:var(--ink-faint)}
+
+/* --- Llenado de Vuelos --- */
+.ll-filters{display:flex;flex-wrap:wrap;gap:14px 22px;align-items:flex-end;background:var(--surface);border:1px solid var(--line);
+  border-radius:13px;padding:12px 16px;margin-bottom:15px}
+.ll-filters .fg{margin:0}
+.ll-filters select,.ll-filters input{font-family:var(--font-body);font-size:12px;padding:5px 8px;border:1px solid var(--line);
+  border-radius:8px;background:var(--surface-2);color:var(--ink)}
+.ll-filters select{max-width:260px}
+.ll-filters input[type=date]{width:130px}
+a.lk{color:var(--2e-blue);cursor:pointer;text-decoration:none;font-weight:600}
+a.lk:hover{text-decoration:underline}
+.kpi.hl{border-color:var(--2e-blue);box-shadow:inset 3px 0 0 var(--2e-blue)}
+.badge{display:inline-block;border-radius:6px;padding:1px 7px;font-size:10.5px;font-weight:600;white-space:nowrap}
+.b-alta{background:#E4F3EA;color:#1E7A4F}.b-media{background:#FFF3E0;color:#8A5A00}.b-baja{background:#FDE7EA;color:#B3162F}
+.b-pc{background:#EAF1FA;color:#2F6DB5}.b-warn{background:#FDE7EA;color:#B3162F;margin:1px 2px}
+:root[data-theme="dark"] .b-alta{background:#123322;color:#34C77A}
+:root[data-theme="dark"] .b-media{background:#3A2A05;color:#F0C674}
+:root[data-theme="dark"] .b-baja,:root[data-theme="dark"] .b-warn{background:#3D1219;color:#FF8A9A}
+:root[data-theme="dark"] .b-pc{background:#16334F;color:#A7C5E1}
+table.ll-mx td{text-align:center;vertical-align:top;min-width:82px}
+table.ll-mx td:first-child{text-align:left;white-space:nowrap}
+table.ll-mx .mes td{background:var(--surface-2);font-family:var(--font-display);font-size:11px;text-align:left}
+table.ll-mx .cv{display:block;line-height:1.25}
+table.ll-mx .cv b{font-size:13px}
+table.ll-mx .cv small{display:block;font-size:9.5px;color:var(--ink-faint)}
+table.ll-mx .tot{color:var(--ink-faint);font-size:10.5px}
 </style>
 </head>
 <body>
@@ -173,6 +211,7 @@ table.dt-compact .mx-n{color:var(--ink-faint);font-size:10px;margin-left:3px}
     <button class="tab" data-tab="productos">Análisis de Productos</button>
     <button class="tab" data-tab="tiempos">Análisis de Tiempos</button>
     <button class="tab" data-tab="ultimamilla">Última Milla</button>
+    <button class="tab" data-tab="llenado">Llenado de Vuelos</button>
   </div>
   <span class="gen" id="gen"></span>
   <button class="theme-toggle" id="theme-toggle-btn" onclick="alternarTemaRL()">🌙 Modo oscuro</button>
@@ -320,6 +359,99 @@ table.dt-compact .mx-n{color:var(--ink-faint);font-size:10px;margin-left:3px}
         <div class="tbl-scroll"><table class="dt" id="um-comuna-table"></table></div>
       </div>
     </section>
+
+    <section id="tab-llenado" class="hidden">
+      <p class="sub">
+        Cómo se llenan los vuelos (AWB) desde que se crean hasta el <b>despacho a aeropuerto</b>. Fuente: NocoDB
+        (<code>guia_madres</code>, <code>guia_hijas</code>, <code>ebox_cumplimiento</code>). <b>Venta</b> = flete
+        internacional + handling (USD); <b>costo</b> = tarifa_costo del AWB × kg facturables (Casilla kilo real, Carga
+        mayor entre real y volumétrico); <b>margen</b> = venta − costo. El total a pagar (CLP, incluye IVA) se muestra
+        solo como referencia. MercadoLibre y Retail van a costo (margen 0). No usa los filtros de la izquierda:
+        tiene los suyos. Clic en un AWB o una casilla de cualquier tabla para filtrar toda la sección.
+      </p>
+      <div class="ll-filters">
+        <div class="fg"><h4>Vuelo (AWB)</h4><select id="ll-vuelo"></select></div>
+        <div class="fg"><h4>Casilla</h4><input id="ll-cas" list="ll-cas-list" placeholder="CL…" style="width:130px"><datalist id="ll-cas-list"></datalist></div>
+        <div class="fg"><h4>Periodo (creación del AWB)</h4>
+          <input type="date" id="ll-desde"> <input type="date" id="ll-hasta">
+          <div class="metric-switch" id="ll-per" style="margin:6px 0 0">
+            <button data-p="4s">4 semanas</button><button data-p="3m" class="on">3 meses</button>
+            <button data-p="anio">Año actual</button><button data-p="todo">Todo</button>
+          </div>
+        </div>
+        <div class="fg"><h4>Ejecutiva <button data-llclear="ej">todas</button></h4><div class="chips" id="ll-ej"></div></div>
+        <div class="fg"><h4>Tipo de cliente <button data-llclear="seg">todos</button></h4><div class="chips" id="ll-seg"></div></div>
+        <button class="reset-all" id="ll-reset" style="width:auto;padding:9px 16px">Limpiar</button>
+      </div>
+      <div class="notice" id="ll-notice"></div>
+      <div class="kpi-row" id="ll-kpis"></div>
+
+      <div class="panel">
+        <h3>T1 · Vuelos en llenado</h3>
+        <div class="sub">AWB creados y todavía sin despacho a aeropuerto. Kg reales y venta/kg destacados. El volumen (kg volumétrico) es solo referencia.</div>
+        <div class="tbl-scroll"><table class="dt" id="ll-t1"></table></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel"><h3>G1 · Curva de llenado</h3><div class="sub">Kg reales acumulados por día desde la creación del AWB. Línea punteada = curva promedio de los últimos vuelos despachados del mismo forwarder (referencia de equilibrio: no hay costos fijos por AWB en la base).</div><div class="chart-box"><canvas id="c-ll-curva"></canvas></div></div>
+        <div class="panel"><h3>G2 · Margen acumulado día a día</h3><div class="sub">US$ de margen acumulado por día desde la creación, vs. el promedio de los vuelos anteriores del mismo forwarder.</div><div class="chart-box"><canvas id="c-ll-margen"></canvas></div></div>
+      </div>
+
+      <div class="panel" style="margin-top:15px">
+        <h3>G3 · Proyección al cierre</h3>
+        <div class="sub" id="ll-proy-sub"></div>
+        <div class="grid-2">
+          <div class="chart-box" style="height:170px"><canvas id="c-ll-proy-kg"></canvas></div>
+          <div class="chart-box" style="height:170px"><canvas id="c-ll-proy-mg"></canvas></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>T5 · Guías listas para subir (1 a 1) y probabilidad de vuelo</h3>
+        <div class="sub">Guías "listas para volar" (pago + Miami con factura) sin AWB. <b>Cartera</b> = FOB del cliente ya subido al vuelo abierto + sus otras guías listas. Tramos: &lt; 500 (sin ad valorem), 500–3.000 (ad valorem 6% sobre CIF), ≥ 3.000 (agente de aduana). <b>Regla</b>: Alta si &lt; 500, guía única o Computadores y Partes (exenta); Media 500–3.000; Baja ≥ 3.000. <b>%</b> = tasa histórica de guías en ese tramo que volaron en su primer vuelo, promediada con el historial del cliente si tiene ≥ 3 guías. Ad valorem = el que ya calculó el sistema para la guía.</div>
+        <div class="metric-switch" id="ll-t5-sw">
+          <button data-s="pag" class="on">Listas (pago + factura)</button>
+          <button data-s="sinpago">Con factura, sin pago</button>
+          <button data-s="todas">Todas</button>
+        </div>
+        <div class="kpi-row" id="ll-t5-kpis"></div>
+        <div class="tbl-scroll" style="max-height:520px;overflow-y:auto"><table class="dt" id="ll-t5"></table></div>
+      </div>
+
+      <div class="panel">
+        <h3>T3 · Matriz de subida de guías</h3>
+        <div class="sub">Filas = semanas (agrupadas por mes), columnas = día de subida al AWB (hora Chile). Cada celda: guías subidas ese día y, abajo, el AWB. Si se trabajaron 2 vuelos en paralelo, aparecen los dos.</div>
+        <div class="tbl-scroll" style="max-height:560px;overflow-y:auto"><table class="dt ll-mx" id="ll-t3"></table></div>
+      </div>
+
+      <div class="panel">
+        <h3>T2 · Vuelos despachados y tiempo de ciclo</h3>
+        <div class="sub">Días entre la creación del AWB y el despacho a aeropuerto. Margen final = venta − costo de las guías del vuelo.</div>
+        <div class="tbl-scroll" style="max-height:460px;overflow-y:auto"><table class="dt" id="ll-t2"></table></div>
+      </div>
+
+      <div class="panel">
+        <h3>T4 · Ratios por vuelo vs. promedio</h3>
+        <div class="sub">Promedio = vuelos despachados del periodo filtrado. Alertas: venta/kg bajo 85% del promedio, kg/guía sobre 150% del promedio (guías pesadas), o un solo cliente con más del 40% de los kg.</div>
+        <div class="tbl-scroll" style="max-height:460px;overflow-y:auto"><table class="dt" id="ll-t4"></table></div>
+      </div>
+
+      <div class="panel">
+        <h3>G4 · Composición del vuelo</h3>
+        <div class="sub">Últimos 12 vuelos del filtro. La última barra es el promedio por vuelo del periodo. Incluye MercadoLibre y Retail aunque estén desmarcados arriba.</div>
+        <div class="metric-switch" id="ll-g4-by"><button data-b="seg" class="on">Por tipo de cliente</button><button data-b="ej">Por ejecutiva</button></div>
+        <div class="metric-switch" id="ll-g4-m"><button data-m="kg" class="on">Kg reales</button><button data-m="tp">Total a pagar (CLP)</button><button data-m="mg">Margen (US$)</button></div>
+        <div class="chart-box tall"><canvas id="c-ll-comp"></canvas></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel"><h3>G5 · Kg vs. venta por guía</h3><div class="sub">Un punto por guía de los últimos 8 vuelos del filtro, color por vuelo. Abajo a la derecha = guías pesadas que pagan poco.</div><div class="chart-box tall"><canvas id="c-ll-disp"></canvas></div></div>
+        <div class="panel"><h3>G6 · Tiempo de espera para subir</h3><div class="sub">Días entre "lista para volar" y la subida al AWB (0 si se subió antes de quedar lista). Histograma y promedio semanal.</div>
+          <div class="chart-box" style="height:175px"><canvas id="c-ll-esp-h"></canvas></div>
+          <div class="chart-box" style="height:175px;margin-top:8px"><canvas id="c-ll-esp-s"></canvas></div>
+        </div>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -409,8 +541,10 @@ document.getElementById("reset-all").onclick=()=>{
 document.getElementById("tabs").onclick=e=>{
   const b=e.target.closest(".tab");if(!b)return;TAB=b.dataset.tab;
   document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t===b));
-  ["resumen","performance","productos","tiempos","ultimamilla"].forEach(t=>
+  ["resumen","performance","productos","tiempos","ultimamilla","llenado"].forEach(t=>
     document.getElementById("tab-"+t).classList.toggle("hidden",t!==TAB));
+  // Llenado de Vuelos tiene sus propios filtros arriba -> se esconde la barra lateral
+  document.querySelector(".sidebar").classList.toggle("hidden",TAB==="llenado");
   render();};
 document.getElementById("perf-metric").onclick=e=>{
   const b=e.target.closest("button");if(!b)return;PMETRIC=b.dataset.m;
@@ -900,7 +1034,272 @@ function renderUltimaMilla(){
   renderTable(document.getElementById("um-comuna-table"),comHead,comBody,umFmtRow("Total",tot));
 }
 
+// ================= Llenado de Vuelos -- dataset propio (LL), filtros propios (LF) =================
+const LL = __PAYLOAD_LL__;
+const LLV = {}; (LL.vuelos||[]).forEach(v=>LLV[v.id]=v);
+const LLBY = {}; (LL.guias||[]).forEach(g=>{(LLBY[g.vid]=LLBY[g.vid]||[]).push(g);});
+const LL_SEGS = ["Natural","Empresa","Carga","MercadoLibre","Retail"];
+const LL_EJS = ["Kathy","Tiare","Sin ejecutiva"];
+const SEG_COLOR = {Natural:"#5691DF",Empresa:"#7B92A4",Carga:"#E0A100",MercadoLibre:"#2E9E6B",Retail:"#E3203E"};
+const EJ_COLOR = {Kathy:"#E3203E",Tiare:"#5691DF","Sin ejecutiva":"#A7C5E1"};
+const LL_PAL = ["#E3203E","#5691DF","#2E9E6B","#E0A100","#152C4A","#B5651D","#7B92A4","#A7C5E1"];
+const LF = {vuelo:0, cas:"", ej:new Set(), seg:new Set(["Natural","Empresa","Carga"]), desde:"", hasta:"", per:"3m"};
+let LLG4BY="seg", LLG4M="kg", LLT5="pag";
+
+const llDay = s => s ? Date.UTC(+s.slice(0,4),+s.slice(5,7)-1,+s.slice(8,10))/864e5 : null;
+const llHrs = s => s ? Date.UTC(+s.slice(0,4),+s.slice(5,7)-1,+s.slice(8,10),+s.slice(11,13)||0,+s.slice(14,16)||0)/36e5 : null;
+const llToday = () => { const d=new Date(); return Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())/864e5; };
+const dayStr = n => new Date(n*864e5).toISOString().slice(0,10);
+const llMon = d => d - ((new Date(d*864e5).getUTCDay()+6)%7);
+function isoWeek(s){
+  const d=new Date(llDay(s)*864e5); d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7)+3);
+  const y=d.getUTCFullYear(), j4=new Date(Date.UTC(y,0,4));
+  return y+"-S"+String(1+Math.round(((d-j4)/864e5-3+((j4.getUTCDay()+6)%7))/7)).padStart(2,"0");
+}
+const fmtD = s => s ? s.slice(8,10)+"-"+s.slice(5,7)+"-"+s.slice(2,4) : "–";
+const fmtCLP = n => n==null?"–":"$"+nf.format(Math.round(n));
+const lkV = v => `<a class="lk" data-lv="${v.id}">${v.awb}</a>`;
+const lkC = c => c ? `<a class="lk" data-lc="${c}">${c}</a>` : "–";
+
+const gOk = g => (!LF.cas||g.cas===LF.cas) && (!LF.ej.size||LF.ej.has(g.ej)) && (!LF.seg.size||LF.seg.has(g.seg));
+const gOkNoSeg = g => (!LF.cas||g.cas===LF.cas) && (!LF.ej.size||LF.ej.has(g.ej));
+const llT5Ok = g => LLT5==="todas" || (LLT5==="pag" ? g.pag===1 : g.pag===0);
+const llEnPeriodo = s => { const d=s.slice(0,10); return (!LF.desde||d>=LF.desde)&&(!LF.hasta||d<=LF.hasta); };
+// los vuelos abiertos se muestran siempre; el periodo filtra por fecha de creación del AWB
+const vOk = v => LF.vuelo ? v.id===LF.vuelo : (v.estado==="abierto" || llEnPeriodo(v.creado));
+const vGuias = (v,f=gOk) => (LLBY[v.id]||[]).filter(f);
+function llAgg(gs){
+  const a={n:0,kg:0,kgv:0,kgf:0,fob:0,fobclp:0,tp:0,venta:0,costo:0};
+  gs.forEach(g=>{a.n++;a.kg+=g.kg;a.kgv+=g.kgv;a.kgf+=g.kgf;a.fob+=g.fob;a.fobclp+=g.fob*g.dol;a.tp+=g.tp;a.venta+=g.venta;a.costo+=g.costo;});
+  a.mg=a.venta-a.costo; return a;
+}
+function llFlights(){
+  return LL.vuelos.filter(vOk).map(v=>({v,a:llAgg(vGuias(v))}))
+    .filter(x=>x.a.n>0||LF.vuelo).sort((x,y)=>x.v.creado<y.v.creado?-1:1);
+}
+// referencia histórica: últimos 10 vuelos regulares despachados del mismo forwarder
+const llHist = (fw,antesDe) => LL.vuelos.filter(v=>v.fw===fw&&v.estado==="despachado"&&v.tipo==="COURIER"&&(!antesDe||v.creado<antesDe)).slice(-10);
+function llCurve(v,key){
+  const d0=llDay(v.creado), fin=v.desp?llDay(v.desp):llToday();
+  const n=Math.max(0,Math.min(30,fin-d0)), arr=new Array(n+1).fill(0);
+  vGuias(v).forEach(g=>{const d=g.asig?Math.max(0,Math.min(n,llDay(g.asig)-d0)):0; arr[d]+=key==="kg"?g.kg:g.venta-g.costo;});
+  for(let i=1;i<arr.length;i++)arr[i]+=arr[i-1];
+  return arr;
+}
+function llAvgCurve(vs,key,len){
+  const cs=vs.map(v=>llCurve(v,key)); if(!cs.length)return null;
+  return Array.from({length:len},(_,i)=>mean(cs.map(c=>c[Math.min(i,c.length-1)])));
+}
+const legendBottom = {display:true,position:"bottom",labels:{boxWidth:10,font:{size:10}}};
+
+function buildLLControls(){
+  if(!LL.vuelos||!LL.vuelos.length)return;
+  const sel=document.getElementById("ll-vuelo");
+  sel.innerHTML='<option value="0">Todos los vuelos</option>'+LL.vuelos.slice().reverse().map(v=>
+    `<option value="${v.id}">${v.awb} · ${v.fw} · ${fmtD(v.creado)}${v.estado==="abierto"?" · ABIERTO":""}</option>`).join("");
+  sel.onchange=()=>{LF.vuelo=+sel.value;renderLlenado();};
+  document.getElementById("ll-cas-list").innerHTML=[...new Set(LL.guias.map(g=>g.cas).filter(Boolean))].sort()
+    .map(c=>`<option value="${c}">`).join("");
+  const cas=document.getElementById("ll-cas");
+  cas.onchange=()=>{LF.cas=cas.value.trim().toUpperCase();renderLlenado();};
+  const chips=(id,items,set)=>{const h=document.getElementById(id);h.innerHTML="";items.forEach(v=>{
+    const c=document.createElement("span");c.className="chip"+(set.has(v)?" on":"");c.textContent=v;
+    c.onclick=()=>{set.has(v)?set.delete(v):set.add(v);c.classList.toggle("on");renderLlenado();};h.appendChild(c);});};
+  chips("ll-ej",LL_EJS,LF.ej); chips("ll-seg",LL_SEGS,LF.seg);
+  document.querySelectorAll("[data-llclear]").forEach(b=>b.onclick=()=>{LF[b.dataset.llclear].clear();
+    document.querySelectorAll(`#ll-${b.dataset.llclear} .chip`).forEach(c=>c.classList.remove("on"));renderLlenado();});
+  document.getElementById("ll-per").onclick=e=>{const b=e.target.closest("button");if(!b)return;llSetPer(b.dataset.p);renderLlenado();};
+  ["desde","hasta"].forEach(k=>document.getElementById("ll-"+k).onchange=e=>{LF[k]=e.target.value;
+    document.querySelectorAll("#ll-per button").forEach(b=>b.classList.remove("on"));renderLlenado();});
+  document.getElementById("ll-reset").onclick=()=>{LF.vuelo=0;LF.cas="";LF.ej.clear();LF.seg=new Set(["Natural","Empresa","Carga"]);
+    sel.value="0";cas.value="";chips("ll-ej",LL_EJS,LF.ej);chips("ll-seg",LL_SEGS,LF.seg);llSetPer("3m");renderLlenado();};
+  const sw=(id,fn)=>document.getElementById(id).onclick=e=>{const b=e.target.closest("button");if(!b)return;
+    document.querySelectorAll(`#${id} button`).forEach(x=>x.classList.toggle("on",x===b));fn(b);renderLlenado();};
+  sw("ll-g4-by",b=>LLG4BY=b.dataset.b); sw("ll-g4-m",b=>LLG4M=b.dataset.m); sw("ll-t5-sw",b=>LLT5=b.dataset.s);
+  // clic en un AWB o una casilla desde cualquier tabla -> filtra toda la sección
+  document.getElementById("tab-llenado").addEventListener("click",e=>{
+    const a=e.target.closest("a.lk");if(!a)return;
+    if(a.dataset.lv){LF.vuelo=+a.dataset.lv;sel.value=a.dataset.lv;}
+    if(a.dataset.lc){LF.cas=a.dataset.lc;cas.value=a.dataset.lc;}
+    renderLlenado();window.scrollTo({top:0,behavior:"smooth"});});
+  llSetPer("3m");
+}
+function llSetPer(p){
+  const t=llToday(); LF.hasta="";
+  LF.desde = p==="4s"?dayStr(t-28) : p==="3m"?dayStr(t-91) : p==="anio"?new Date().getFullYear()+"-01-01" : "";
+  document.getElementById("ll-desde").value=LF.desde; document.getElementById("ll-hasta").value="";
+  document.querySelectorAll("#ll-per button").forEach(b=>b.classList.toggle("on",b.dataset.p===p));
+}
+
+function renderLlenado(){
+  const nt=document.getElementById("ll-notice");
+  if(!LL.guias||!LL.guias.length){nt.textContent="Sin datos de llenado: falta correr extraer_llenado.py.";return;}
+  const fl=llFlights();
+  const imp=LL.vuelos.filter(v=>v.estado==="abierto"&&v.tarifa_imp).map(v=>v.awb);
+  nt.innerHTML=`Datos al ${LL.generado} (hora Chile). Vuelos analizados desde ${fmtD(LL.awb_desde)}. `+
+    (imp.length?`Tarifa de costo <b>estimada</b> (*) para ${imp.join(", ")}: el AWB aún no la tiene cargada; se usa la mediana de los últimos 90 días del forwarder. `:"")+
+    `El periodo filtra por creación del AWB; los vuelos abiertos se muestran siempre.`;
+  renderLLKpis(fl); renderLLT1(fl); renderLLCurvas(fl); renderLLProy(); renderLLT5();
+  renderLLT3(); renderLLT2(fl); renderLLT4(fl); renderLLG4(fl); renderLLG5(fl); renderLLG6();
+}
+function renderLLKpis(fl){
+  const ab=fl.filter(x=>x.v.estado==="abierto"), de=fl.filter(x=>x.v.estado==="despachado");
+  const A=llAgg(ab.flatMap(x=>vGuias(x.v))), D=llAgg(de.flatMap(x=>vGuias(x.v)));
+  const ciclo=mean(de.map(x=>x.v.desp?llDay(x.v.desp)-llDay(x.v.creado):null));
+  const pend=LL.guias.filter(g=>g.vid===0&&gOk(g)&&g.pag===1);
+  const k=(v,l,s,hl)=>`<div class="kpi${hl?" hl":""}"><div class="v">${v}</div><div class="l">${l}</div>${s?`<div class="s">${s}</div>`:""}</div>`;
+  document.getElementById("ll-kpis").innerHTML=
+    k(fmtN(ab.length),"Vuelos abiertos",`${fmtN(A.n)} guías subidas`)+
+    k(fmtKg(A.kg),"Kg en vuelos abiertos","kilo real",true)+
+    k(A.kgf?"US$"+fmt2(A.venta/A.kgf):"–","Venta / kg abiertos",A.kgf?`costo US$${fmt2(A.costo/A.kgf)}/kg`:"",true)+
+    k(fmtUSD(A.mg),"Margen estimado abiertos",A.venta?`${fmt1(100*A.mg/A.venta)}% de la venta`:"")+
+    k(fmtN(de.length),"Vuelos despachados",`${fmtKg(D.kg)} · margen ${fmtUSD(D.mg)}`)+
+    k(ciclo==null?"–":fmt1(ciclo)+" d","Ciclo creación → despacho","promedio del periodo")+
+    k(fmtN(pend.length),"Guías listas sin AWB",fmtKg(pend.reduce((s,g)=>s+g.kg,0)));
+}
+function renderLLT1(fl){
+  const rows=fl.filter(x=>x.v.estado==="abierto"), t=document.getElementById("ll-t1");
+  if(!rows.length){t.innerHTML="<tbody><tr><td>No hay vuelos abiertos con el filtro actual.</td></tr></tbody>";return;}
+  const vk=a=>a.kgf?a.venta/a.kgf:null, mk=a=>a.kgf?a.mg/a.kgf:null;
+  const body=rows.map(({v,a})=>[isoWeek(v.creado),lkV(v)+(v.tipo==="CARGA"?' <span class="badge b-pc">carga</span>':""),v.fw,
+    fmtD(v.creado),fmtN(llToday()-llDay(v.creado)),fmtN(a.n),`<b>${fmt1(a.kg)}</b>`,fmt1(a.kgv),fmtUSD(a.fob),fmtCLP(a.tp),
+    `<b>${fmt2(vk(a))}</b>`,fmt2(v.tarifa)+(v.tarifa_imp?"*":""),fmtUSD(a.mg),fmt2(mk(a))]);
+  const T=llAgg(rows.flatMap(x=>vGuias(x.v)));
+  renderTable(t,["Semana","Vuelo / AWB","Forwarder","Creación","Días abierto","Guías","Kg reales","Kg vol. (ref.)","FOB US$",
+    "Total a pagar (ref.)","Venta US$/kg","Costo US$/kg","Margen US$","Margen US$/kg"],body,
+    ["Total","","","","",fmtN(T.n),fmt1(T.kg),fmt1(T.kgv),fmtUSD(T.fob),fmtCLP(T.tp),fmt2(vk(T)),"",fmtUSD(T.mg),fmt2(mk(T))]);
+}
+function renderLLCurvas(fl){
+  let sel=LF.vuelo?[LLV[LF.vuelo]]:fl.filter(x=>x.v.estado==="abierto"&&x.v.tipo==="COURIER").map(x=>x.v);
+  if(!sel.length)sel=fl.filter(x=>x.v.estado==="despachado").slice(-3).map(x=>x.v);
+  const fw=sel[0]?sel[0].fw:null, hist=fw?llHist(fw,sel[0].creado):[];
+  [["kg","c-ll-curva","kg acumulados"],["mg","c-ll-margen","US$ margen acumulado"]].forEach(([key,id,yl])=>{
+    const cs=sel.map(v=>llCurve(v,key));
+    const len=Math.max(8,...cs.map(c=>c.length));
+    const avg=llAvgCurve(hist,key,len);
+    const ds=cs.map((c,i)=>({label:sel[i].awb,data:c,borderColor:LL_PAL[i%8],backgroundColor:LL_PAL[i%8],tension:.2,pointRadius:2}));
+    if(avg)ds.push({label:`Promedio últimos ${hist.length} vuelos ${fw}`,data:avg,borderColor:"#7B92A4",borderDash:[6,4],pointRadius:0,tension:.2});
+    newChart(id,{type:"line",data:{labels:Array.from({length:len},(_,i)=>"Día "+i),datasets:ds},
+      options:{...baseOpts,plugins:{legend:legendBottom},scales:{y:{title:{display:true,text:yl}}}}});
+  });
+}
+const llPw = g => g.p!=null ? g.p : ({Alta:.9,Media:.6,Baja:.3}[g.regla]||.5);
+function renderLLProy(){
+  const sub=document.getElementById("ll-proy-sub");
+  const tgt=(LF.vuelo&&LLV[LF.vuelo].estado==="abierto")?LLV[LF.vuelo]:LLV[LL.vuelo_objetivo];
+  if(!tgt){sub.textContent="No hay un vuelo regular abierto para proyectar.";
+    ["c-ll-proy-kg","c-ll-proy-mg"].forEach(id=>{if(charts[id]){charts[id].destroy();delete charts[id];}});return;}
+  const a=llAgg(vGuias(tgt));
+  const pend=LL.guias.filter(g=>g.vid===0&&gOk(g)&&llT5Ok(g));
+  const kgP=pend.reduce((s,g)=>s+g.kg*llPw(g),0), mgP=pend.reduce((s,g)=>s+(g.venta-g.costo)*llPw(g),0);
+  const hist=llHist(tgt.fw,tgt.creado).map(v=>llAgg(vGuias(v)));
+  const hKg=mean(hist.map(h=>h.kg)), hMg=mean(hist.map(h=>h.mg));
+  sub.innerHTML=`Vuelo <b>${tgt.awb}</b> (${tgt.fw}, creado ${fmtD(tgt.creado)}): lo ya subido + las guías pendientes de T5 `+
+    `(según su selector) ponderadas por su probabilidad. Cierre proyectado: <b>${fmtKg(a.kg+kgP)}</b> y <b>${fmtUSD(a.mg+mgP)}</b> de margen `+
+    `vs. promedio de ${hist.length} vuelos ${tgt.fw}: ${fmtKg(hKg)} y ${fmtUSD(hMg)}.`;
+  const mk=(id,act,pro,avg,t)=>newChart(id,{type:"bar",data:{labels:["Este vuelo","Promedio histórico"],datasets:[
+    {label:"Actual",data:[act,null],backgroundColor:"#5691DF",stack:"s"},
+    {label:"Pendiente ponderado",data:[pro,null],backgroundColor:"#A7C5E1",stack:"s"},
+    {label:"Promedio",data:[null,avg],backgroundColor:"#7B92A4",stack:"s"}]},
+    options:{...baseOpts,indexAxis:"y",plugins:{legend:legendBottom,title:{display:true,text:t}},scales:{x:{stacked:true},y:{stacked:true}}}});
+  mk("c-ll-proy-kg",a.kg,kgP,hKg,"Kg reales"); mk("c-ll-proy-mg",a.mg,mgP,hMg,"Margen US$");
+}
+function renderLLT5(){
+  const ref=g=>g.lista||g.mcf;
+  const ps=LL.guias.filter(g=>g.vid===0&&gOk(g)&&llT5Ok(g)).sort((a,b)=>ref(a)<ref(b)?-1:1);
+  const T=llAgg(ps), kgP=ps.reduce((s,g)=>s+g.kg*llPw(g),0);
+  const k=(v,l)=>`<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  document.getElementById("ll-t5-kpis").innerHTML=k(fmtN(T.n),"Guías pendientes")+k(fmtKg(T.kg),"Kg si se sube todo hoy")+
+    k(fmtUSD(T.venta),"Venta US$")+k(fmtUSD(T.mg),"Margen US$")+k(fmtKg(kgP),"Kg esperados (× prob.)");
+  const t=document.getElementById("ll-t5");
+  if(!ps.length){t.innerHTML="<tbody><tr><td>No hay guías pendientes con el filtro actual.</td></tr></tbody>";return;}
+  const hoy=Date.now()/36e5;
+  const badge=g=>`<span class="badge b-${g.regla.toLowerCase()}">${g.regla}${g.p!=null?" · "+Math.round(g.p*100)+"%":""}</span>`;
+  renderTable(t,["Guía","Casilla","Cliente","Ejecutiva","Pagada","Lista desde","Días esperando","Kg","FOB US$","Venta US$",
+    "Margen est. US$","Categoría","FOB cartera cliente","Tramo","Ad valorem (CLP)","Probabilidad","Hist. cliente","Descripción"],
+    ps.map(g=>[g.ng,lkC(g.cas),g.cli||"–",g.ej,g.pag?"Sí":"No",fmtD(ref(g)),fmt1(Math.max(0,(hoy-llHrs(ref(g))-new Date().getTimezoneOffset()/60)/24)),
+      fmt1(g.kg),fmtUSD(g.fob),fmtUSD(g.venta),fmtUSD(g.venta-g.costo),
+      g.ex?'<span class="badge b-pc">Computadores y Partes (exenta)</span>':"General",
+      fmtUSD(g.fob_cart),g.tramo,fmtCLP(g.adv),badge(g),g.cli_hist||"–",g.desc||""]));
+}
+function renderLLT3(){
+  const t=document.getElementById("ll-t3");
+  const gs=LL.guias.filter(g=>g.vid&&g.asig&&gOk(g)&&(!LF.vuelo||g.vid===LF.vuelo)&&(LF.vuelo||llEnPeriodo(g.asig)));
+  const cell={};
+  gs.forEach(g=>{const d=llDay(g.asig);(cell[d]=cell[d]||{})[g.vid]=((cell[d]||{})[g.vid]||0)+1;});
+  const days=Object.keys(cell).map(Number);
+  if(!days.length){t.innerHTML="<tbody><tr><td>Sin subidas en el filtro.</td></tr></tbody>";return;}
+  const weeks=[...new Set(days.map(llMon))].sort((a,b)=>b-a);
+  let h="<thead><tr><th>Semana (lunes)</th>"+["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(x=>`<th>${x}</th>`).join("")+"<th>Total</th></tr></thead><tbody>",mes0="";
+  weeks.forEach(w=>{
+    const ws=dayStr(w), mes=ws.slice(0,7);
+    if(mes!==mes0){h+=`<tr class="mes"><td colspan="9">${MESES[+mes.slice(5,7)-1]} ${mes.slice(0,4)}</td></tr>`;mes0=mes;}
+    let tot=0; h+=`<tr><td>${fmtD(ws)}</td>`;
+    for(let i=0;i<7;i++){const c=cell[w+i];
+      h+="<td>"+(c?Object.entries(c).sort((a,b)=>b[1]-a[1]).map(([vid,n])=>{tot+=n;const v=LLV[vid];
+        return `<span class="cv"><b>${n}</b><small><a class="lk" data-lv="${vid}">${v?v.awb:vid}</a></small></span>`;}).join(""):"")+"</td>";}
+    h+=`<td class="tot">${tot}</td></tr>`;});
+  t.innerHTML=h+"</tbody>";
+}
+function renderLLT2(fl){
+  const rows=fl.filter(x=>x.v.estado==="despachado"&&x.a.n).reverse();
+  const cic=v=>v.desp?llDay(v.desp)-llDay(v.creado):null;
+  const T=llAgg(rows.flatMap(x=>vGuias(x.v)));
+  renderTable(document.getElementById("ll-t2"),["Vuelo / AWB","Forwarder","Tipo","Creación","Despacho","Días ciclo","Guías","Kg reales",
+    "Venta US$","Costo US$","Margen US$","Margen %","Venta US$/kg"],
+    rows.map(({v,a})=>[lkV(v),v.fw,v.tipo==="CARGA"?"Carga":"Regular",fmtD(v.creado),fmtD(v.desp),fmtN(cic(v)),fmtN(a.n),fmt1(a.kg),
+      fmtUSD(a.venta),fmtUSD(a.costo),fmtUSD(a.mg),a.venta?fmt1(100*a.mg/a.venta)+"%":"–",fmt2(a.kgf?a.venta/a.kgf:null)]),
+    ["Total","","","","",fmt1(mean(rows.map(x=>cic(x.v)))),fmtN(T.n),fmt1(T.kg),fmtUSD(T.venta),fmtUSD(T.costo),fmtUSD(T.mg),
+      T.venta?fmt1(100*T.mg/T.venta)+"%":"–",fmt2(T.kgf?T.venta/T.kgf:null)]);
+}
+function renderLLT4(fl){
+  const r=x=>({vk:x.a.kgf?x.a.venta/x.a.kgf:null,tf:x.a.fobclp?x.a.tp/x.a.fobclp:null,fk:x.a.kg?x.a.fob/x.a.kg:null,kg:x.a.n?x.a.kg/x.a.n:null});
+  const base=fl.filter(x=>x.v.estado==="despachado"&&x.v.tipo==="COURIER"&&x.a.n).map(r);
+  const avg={};["vk","tf","fk","kg"].forEach(k=>avg[k]=mean(base.map(q=>q[k])));
+  const rows=fl.filter(x=>x.a.n).reverse().map(x=>{
+    const q=r(x), al=[];
+    // el promedio es de vuelos regulares: a los AWB de carga (tarifa distinta) no se les aplica
+    if(x.v.tipo==="COURIER"&&q.vk!=null&&avg.vk&&q.vk<.85*avg.vk)al.push("venta/kg baja");
+    if(x.v.tipo==="COURIER"&&q.kg!=null&&avg.kg&&q.kg>1.5*avg.kg)al.push("guías pesadas");
+    const byc={};vGuias(x.v).forEach(g=>byc[g.cas]=(byc[g.cas]||0)+g.kg);
+    const top=Object.entries(byc).sort((a,b)=>b[1]-a[1])[0];
+    if(top&&x.a.n>3&&top[1]>.4*x.a.kg)al.push(`${top[0]} = ${Math.round(100*top[1]/x.a.kg)}% de los kg`);
+    return [lkV(x.v),x.v.estado==="abierto"?"Abierto":"Despachado",fmt2(q.vk),fmt2(q.tf),fmt2(q.fk),fmt1(q.kg),
+      al.map(a=>`<span class="badge b-warn">⚠ ${a}</span>`).join("")||"–"];});
+  renderTable(document.getElementById("ll-t4"),["Vuelo / AWB","Estado","Venta US$/kg","Total a pagar ÷ FOB","FOB US$/kg","Kg/guía","Alertas"],
+    rows,["Promedio despachados","",fmt2(avg.vk),fmt2(avg.tf),fmt2(avg.fk),fmt1(avg.kg),""]);
+}
+function renderLLG4(fl){
+  const last=fl.slice(-12), cats=LLG4BY==="seg"?LL_SEGS:LL_EJS, col=LLG4BY==="seg"?SEG_COLOR:EJ_COLOR;
+  const val=g=>LLG4M==="kg"?g.kg:LLG4M==="tp"?g.tp:g.venta-g.costo;
+  const per=x=>{const o={};cats.forEach(c=>o[c]=0);vGuias(x.v,gOkNoSeg).forEach(g=>o[LLG4BY==="seg"?g.seg:g.ej]+=val(g));return o;};
+  const data=last.map(per), desp=fl.filter(x=>x.v.estado==="despachado").map(per);
+  newChart("c-ll-comp",{type:"bar",data:{labels:last.map(x=>x.v.awb+" · "+fmtD(x.v.creado).slice(0,5)).concat(["Promedio"]),
+    datasets:cats.map(c=>({label:c,data:data.map(o=>o[c]).concat([desp.length?mean(desp.map(o=>o[c])):0]),backgroundColor:col[c]}))},
+    options:{...baseOpts,plugins:{legend:legendBottom},scales:{x:{stacked:true},y:{stacked:true}}}});
+}
+function renderLLG5(fl){
+  const last=fl.slice(-8);
+  newChart("c-ll-disp",{type:"scatter",data:{datasets:last.map((x,i)=>({label:x.v.awb,
+    data:vGuias(x.v).map(g=>({x:g.kg,y:g.venta,ng:g.ng,cas:g.cas})),backgroundColor:LL_PAL[i%8]+"B3",pointRadius:3}))},
+    options:{...baseOpts,plugins:{legend:legendBottom,tooltip:{callbacks:{label:c=>`Guía ${c.raw.ng} · ${c.raw.cas}: ${fmt1(c.raw.x)} kg · US$${fmt1(c.raw.y)}`}}},
+      scales:{x:{title:{display:true,text:"kg reales"}},y:{title:{display:true,text:"venta US$"}}}}});
+}
+function renderLLG6(){
+  const gs=LL.guias.filter(g=>g.vid&&g.asig&&g.lista&&gOk(g)&&(!LF.vuelo||g.vid===LF.vuelo)&&(LF.vuelo||llEnPeriodo(g.asig)));
+  const w=g=>Math.max(0,(llHrs(g.asig)-llHrs(g.lista))/24);
+  const bins=[[0,1,"< 1"],[1,2,"1–2"],[2,3,"2–3"],[3,5,"3–5"],[5,7,"5–7"],[7,14,"7–14"],[14,1e9,"14+"]];
+  newChart("c-ll-esp-h",{type:"bar",data:{labels:bins.map(b=>b[2]+" d"),datasets:[{label:"Guías",
+    data:bins.map(b=>gs.filter(g=>w(g)>=b[0]&&w(g)<b[1]).length),backgroundColor:"#5691DF"}]},options:baseOpts});
+  const sem={};gs.forEach(g=>{const m=llMon(llDay(g.asig));(sem[m]=sem[m]||[]).push(w(g));});
+  const ks=Object.keys(sem).map(Number).sort((a,b)=>a-b);
+  newChart("c-ll-esp-s",{type:"line",data:{labels:ks.map(k=>fmtD(dayStr(k))),datasets:[{label:"Días promedio",
+    data:ks.map(k=>mean(sem[k])),borderColor:"#E3203E",backgroundColor:"#E3203E",tension:.2,pointRadius:2}]},
+    options:{...baseOpts,scales:{y:{title:{display:true,text:"días promedio (semana de subida)"}}}}});
+}
+
 function render(){
+  if(TAB==="llenado"){renderLlenado();return;}
   const rows=filtered();
   const m=DB.meta;
   document.getElementById("scope-note").innerHTML=
@@ -940,13 +1339,14 @@ function alternarTemaRL(){
 actualizarBotonTemaRL();
 aplicarTemaGraficos();
 buildChips();
+buildLLControls();
 render();
 </script>
 </body>
 </html>
 """
 
-out = HTML.replace("__PAYLOAD__", PAYLOAD).replace("__PAYLOAD_UM__", PAYLOAD_UM)
+out = HTML.replace("__PAYLOAD__", PAYLOAD).replace("__PAYLOAD_UM__", PAYLOAD_UM).replace("__PAYLOAD_LL__", PAYLOAD_LL)
 (BASE / "reporte-logistica-operaciones.html").write_text(out, encoding="utf-8")
 print(f"HTML -> reporte-logistica-operaciones.html  ({len(out)//1024} KB)")
 

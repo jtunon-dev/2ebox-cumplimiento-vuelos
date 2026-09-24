@@ -721,3 +721,8 @@ def extraer_ultima_milla():
 if __name__ == "__main__":
     main()
     extraer_ultima_milla()
+    # Llenado de Vuelos (pestaña nueva, 2026-09-24): extractor aparte, pero se
+    # llama desde acá por el mismo motivo que Última Milla -- el token de push
+    # no tiene scope "workflow", así que no se puede agregar un paso al CI.
+    import extraer_llenado
+    extraer_llenado.main()
