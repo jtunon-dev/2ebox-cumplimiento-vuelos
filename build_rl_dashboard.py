@@ -194,7 +194,7 @@ a.lk:hover{text-decoration:underline}
 :root[data-theme="dark"] .b-baja,:root[data-theme="dark"] .b-warn{background:#3D1219;color:#FF8A9A}
 :root[data-theme="dark"] .b-pc{background:#16334F;color:#A7C5E1}
 table.ll-mx td{text-align:center;vertical-align:top;min-width:82px}
-table.ll-mx td:first-child{text-align:left;white-space:nowrap}
+table.ll-mx td:first-child,table.ll-mx td:nth-child(2){text-align:left;white-space:nowrap}
 table.ll-mx .mes td{background:var(--surface-2);font-family:var(--font-display);font-size:11px;text-align:left}
 table.ll-mx .cv{display:block;line-height:1.25}
 table.ll-mx .cv b{font-size:13px}
@@ -420,7 +420,7 @@ table.ll-mx .tot{color:var(--ink-faint);font-size:10.5px}
 
       <div class="panel">
         <h3>T3 · Matriz de subida de guías</h3>
-        <div class="sub">Filas = semanas (agrupadas por mes), columnas = día de subida al AWB (hora Chile). Cada celda: guías subidas ese día y, abajo, el AWB. Si se trabajaron 2 vuelos en paralelo, aparecen los dos.</div>
+        <div class="sub">Una fila por vuelo (mes · AWB), columnas = día de la semana de subida al AWB (hora Chile). Cada celda: guías subidas ese día y, abajo, el % acumulado del total de ese vuelo hasta ese día.</div>
         <div class="tbl-scroll" style="max-height:560px;overflow-y:auto"><table class="dt ll-mx" id="ll-t3"></table></div>
       </div>
 
@@ -1225,20 +1225,36 @@ function renderLLT5(){
 function renderLLT3(){
   const t=document.getElementById("ll-t3");
   const gs=LL.guias.filter(g=>g.vid&&g.asig&&gOk(g)&&(!LF.vuelo||g.vid===LF.vuelo)&&(LF.vuelo||llEnPeriodo(g.asig)));
-  const cell={};
-  gs.forEach(g=>{const d=llDay(g.asig);(cell[d]=cell[d]||{})[g.vid]=((cell[d]||{})[g.vid]||0)+1;});
-  const days=Object.keys(cell).map(Number);
-  if(!days.length){t.innerHTML="<tbody><tr><td>Sin subidas en el filtro.</td></tr></tbody>";return;}
-  const weeks=[...new Set(days.map(llMon))].sort((a,b)=>b-a);
-  let h="<thead><tr><th>Semana (lunes)</th>"+["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(x=>`<th>${x}</th>`).join("")+"<th>Total</th></tr></thead><tbody>",mes0="";
-  weeks.forEach(w=>{
-    const ws=dayStr(w), mes=ws.slice(0,7);
-    if(mes!==mes0){h+=`<tr class="mes"><td colspan="9">${MESES[+mes.slice(5,7)-1]} ${mes.slice(0,4)}</td></tr>`;mes0=mes;}
-    let tot=0; h+=`<tr><td>${fmtD(ws)}</td>`;
-    for(let i=0;i<7;i++){const c=cell[w+i];
-      h+="<td>"+(c?Object.entries(c).sort((a,b)=>b[1]-a[1]).map(([vid,n])=>{tot+=n;const v=LLV[vid];
-        return `<span class="cv"><b>${n}</b><small><a class="lk" data-lv="${vid}">${v?v.awb:vid}</a></small></span>`;}).join(""):"")+"</td>";}
-    h+=`<td class="tot">${tot}</td></tr>`;});
+  if(!gs.length){t.innerHTML="<tbody><tr><td>Sin subidas en el filtro.</td></tr></tbody>";return;}
+  // Una fila por vuelo: dia -> guias subidas ese dia, + total del vuelo (para
+  // el % acumulado). El lunes de referencia es el de la PRIMERA subida del
+  // vuelo -- en la practica todo un vuelo se llena dentro de la misma semana.
+  const porVuelo={};
+  gs.forEach(g=>{
+    const d=llDay(g.asig);
+    const o=(porVuelo[g.vid]=porVuelo[g.vid]||{dias:{},total:0,primerDia:d});
+    o.dias[d]=(o.dias[d]||0)+1; o.total++;
+    if(d<o.primerDia)o.primerDia=d;
+  });
+  const vids=Object.keys(porVuelo).sort((a,b)=>porVuelo[b].primerDia-porVuelo[a].primerDia);
+  let h="<thead><tr><th>Mes</th><th>Vuelo</th>"+["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(x=>`<th>${x}</th>`).join("")+"<th>Total</th></tr></thead><tbody>";
+  let mes0="";
+  vids.forEach(vid=>{
+    const o=porVuelo[vid], v=LLV[vid];
+    const mon=llMon(o.primerDia), mes=dayStr(mon).slice(0,7);
+    const mesLbl=MESES[+mes.slice(5,7)-1]+" "+mes.slice(0,4);
+    h+=`<tr><td>${mes===mes0?"":mesLbl}</td><td>${v?lkV(v):vid}</td>`;
+    mes0=mes;
+    let acum=0;
+    for(let i=0;i<7;i++){
+      const n=o.dias[mon+i]||0;
+      if(!n){h+="<td></td>";continue;}
+      acum+=n;
+      const pct=o.total?Math.round(100*acum/o.total):0;
+      h+=`<td><span class="cv"><b>${n}</b><small>${pct}%</small></span></td>`;
+    }
+    h+=`<td class="tot">${o.total}</td></tr>`;
+  });
   t.innerHTML=h+"</tbody>";
 }
 function renderLLT2(fl){
