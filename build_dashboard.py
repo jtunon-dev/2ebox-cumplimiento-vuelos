@@ -80,17 +80,25 @@ def color_tolerancia(pct):
     return "var(--good)"
 
 
-def gauge_tolerancia_html(pct, extra_label=""):
-    """Barra de progreso / gauge horizontal (pedido de Jorge, 2026-09-04):
+def gauge_tolerancia_html(valores):
+    """Barra de progreso / gauge horizontal (pedido de Jorge, 2026-09-04;
+    ampliado 2026-09-28 para mostrar los 3 criterios a la vez en vez de
+    solo "estricto" sin importar el toggle de arriba, que era confuso):
     track con degradado FIJO verde -> amarillo -> rojo -> rojo oscuro (la
     escala de riesgo en sí, con los mismos tramos que color_tolerancia()),
-    más un marcador que cae en la posición del % real. El eje se escala
-    dinámicamente (mínimo 15%, o el real +30% de margen si es mayor) para
-    que el marcador y los topes de 5%/10% siempre queden legibles."""
+    más UN MARCADOR POR CRITERIO (Regular/Misma semana/Permisivo) en la
+    posición de su % real, y una leyenda alineada debajo con nombre + %
+    de cada uno (en vez de burbujas flotantes sobre la barra, que se
+    pisaban si los 3 % quedaban cerca). El eje se escala dinámicamente
+    (mínimo 15%, o el mayor de los 3 +30% de margen si es mayor) para que
+    los marcadores y los topes de 5%/10% siempre queden legibles.
+
+    valores: lista de tuplas (nombre_corto, pct), una por criterio."""
     tope = TOLERANCIA_MAX_PCT
     doble = TOLERANCIA_MAX_PCT * 2
     cerca = TOLERANCIA_MAX_PCT * 0.6
-    scale_max = max(15.0, doble * 1.15, pct * 1.3)
+    pct_max = max(v for _, v in valores)
+    scale_max = max(15.0, doble * 1.15, pct_max * 1.3)
 
     def pos(v):
         return round(min(v, scale_max) / scale_max * 100, 2)
@@ -99,28 +107,40 @@ def gauge_tolerancia_html(pct, extra_label=""):
         f"linear-gradient(to right, var(--good) 0%, var(--warn) {pos(cerca)}%, "
         f"var(--bad) {pos(tope)}%, var(--bad-dark) {pos(doble)}%, var(--bad-dark) 100%)"
     )
-    marcador_pct = pos(pct)
-    label = f"{fmt_pct(pct)}" + (f" {extra_label}" if extra_label else "")
 
-    # Los topes de 5% / 10% llevan su número rotulado DEBAJO del track
-    # (el marcador y su burbuja van por ARRIBA, así que no se pisan). Si el
-    # marcador cae muy cerca de un tope, el rótulo de ese tope se corre un
-    # poco para que no quede tapado por la línea del marcador.
+    # 3 tonos de azul (familia propia, separada del rojo/ámbar/verde de la
+    # escala de riesgo del fondo, para no confundir "de qué criterio es"
+    # con "qué tan grave es").
+    MARCADOR_COLORS = ["#152C4A", "#5691DF", "#A7C5E1"]
+    marcadores = "".join(
+        f'<div class="tol-gauge-marker" style="left:{pos(pct)}%;background:{MARCADOR_COLORS[i % len(MARCADOR_COLORS)]}"></div>'
+        for i, (_nombre, pct) in enumerate(valores)
+    )
+    leyenda = "".join(
+        f'<span class="tg-leg-valor"><i style="background:{MARCADOR_COLORS[i % len(MARCADOR_COLORS)]}"></i>{nombre}: <b>{fmt_pct(pct)}</b></span>'
+        for i, (nombre, pct) in enumerate(valores)
+    )
+
+    # Los topes de 5% / 10% llevan su número rotulado debajo del track. Si
+    # el marcador más alto (el más probable candidato a chocar con un tope)
+    # cae muy cerca de un tope, el rótulo de ese tope se corre para no
+    # quedar tapado por la línea del marcador.
     def _shift(v):
-        return -50 if abs(marcador_pct - pos(v)) > 6 else (-100 if marcador_pct >= pos(v) else 0)
+        return -50 if abs(pos(pct_max) - pos(v)) > 6 else (-100 if pos(pct_max) >= pos(v) else 0)
 
     return f"""
   <div class="tol-gauge">
     <div class="tol-gauge-track" style="background-image:{gradiente}">
       <div class="tol-gauge-tick" style="left:{pos(tope)}%"></div>
       <div class="tol-gauge-tick doble" style="left:{pos(doble)}%"></div>
-      <div class="tol-gauge-marker" style="left:{marcador_pct}%"><span class="tg-marker-label">{label}</span></div>
+      {marcadores}
     </div>
     <div class="tol-gauge-ticklabels">
       <span class="tg-tick-lbl" style="left:{pos(tope)}%;transform:translateX({_shift(tope)}%)"><b>{fmt_pct(tope)}</b><i>tolerancia</i></span>
       <span class="tg-tick-lbl doble" style="left:{pos(doble)}%;transform:translateX({_shift(doble)}%)"><b>{fmt_pct(doble)}</b><i>doble — grave</i></span>
     </div>
     <div class="tol-gauge-scale"><span>0%</span><span>{fmt_pct(scale_max)}</span></div>
+    <div class="tol-gauge-valores">{leyenda}</div>
   </div>
 """
 
@@ -536,7 +556,18 @@ def build_tolerancia(dom_id, incluir_tabla=True):
     exceso_g = max(0, round(af_g - tope_g))
     exceso_kg = max(0, round(af_kg - tope_kg, 1))
 
-    gauge = gauge_tolerancia_html(pct_g)
+    # El gauge muestra los 3 criterios a la vez (Jorge, 2026-09-28) aunque
+    # el KPI/tabla de esta sección siga midiendo la tolerancia con
+    # "estricto" (vuelo exacto), que es la definición oficial acordada.
+    b_sem = data["semana"]
+    b_uno = data["un_vuelo"]
+    pct_sem = round(b_sem["total_incidentes"] / b_sem["total_evaluables"] * 100, 1) if b_sem["total_evaluables"] else 0
+    pct_uno = round(b_uno["total_incidentes"] / b_uno["total_evaluables"] * 100, 1) if b_uno["total_evaluables"] else 0
+    gauge = gauge_tolerancia_html([
+        ("Regular (vuelo exacto)", pct_g),
+        ("Misma semana", pct_sem),
+        ("Permisivo +1 vuelo", pct_uno),
+    ])
 
     kpis = f"""
     <div class="kpis">
@@ -2017,8 +2048,21 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
         s: [semana_numero(s), semana_label(s)]
         for s in sorted(set(r["sem"] for r in filas))
     }
+    # OJO (bug encontrado y corregido 2026-09-28, Jorge: "no me calza el %
+    # de guías... vs los de abajo"): los checkboxes de Convenio/Tamaño/
+    # Fricción se armaban SOLO con los valores que aparecen entre las guías
+    # AFECTADAS. Una guía a tiempo con un valor que ningún incidente
+    # comparte quedaba SIN checkbox -- y por lo tanto excluida en silencio
+    # del universo/denominador en gaFiltrar(), aunque "todo" se viera
+    # marcado. Ahora el SET de valores (qué checkboxes existen) sale de
+    # `filas` (todo el universo evaluable); el conteito que se muestra al
+    # lado de cada checkbox sigue siendo "cuántas afectadas tienen ese
+    # valor" (más útil para priorizar), vía Counter.get()/[] con default 0.
     convenio_counts = Counter(r["conv"] for r in afectadas_todas)
-    convenios_ordenados = sorted(convenio_counts.items(), key=lambda kv: -kv[1])
+    conv_valores = sorted({r["conv"] for r in filas})
+    convenios_ordenados = sorted(
+        ((c, convenio_counts.get(c, 0)) for c in conv_valores), key=lambda kv: -kv[1]
+    )
     ejecutiva_counts = Counter(r["eje"] for r in afectadas_todas)
     motivo_counts = Counter(r["mot"] for r in afectadas_todas)
     ORDEN_MOTIVOS = (
@@ -2030,11 +2074,13 @@ def build_guias_afectadas(scope="estricto", titulo_bloque="vuelo exacto", dom_id
 
     pob_counts = Counter(r["pob"] for r in afectadas_todas)
     tam_counts = Counter(r["tam"] for r in afectadas_todas)
+    tam_valores = {r["tam"] for r in filas}
     ORDEN_TAM = ["Individual", "2-3 guías", "4-6 guías", "7-10 guías", "11+ guías"]
-    tam_presentes = [t for t in ORDEN_TAM if tam_counts.get(t)]
+    tam_presentes = [t for t in ORDEN_TAM if t in tam_valores]
     fri_counts = Counter(r["friL"] for r in afectadas_todas)
+    fri_valores = {r["friL"] for r in filas}
     ORDEN_FRI = ["Factura pendiente al cerrar", "Armado lento (>3 días)", "Sin señal / individual"]
-    fri_presentes = [f for f in ORDEN_FRI if fri_counts.get(f)]
+    fri_presentes = [f for f in ORDEN_FRI if f in fri_valores]
 
     conteo_por_mes = Counter(r["mo"] for r in afectadas_todas)
     checkboxes_meses = "".join(
@@ -3004,18 +3050,20 @@ HTML = f"""<!DOCTYPE html>
     position: absolute; top: -7px; bottom: -7px; width: 4px; margin-left: -2px;
     background: var(--ink); border-radius: 3px; box-shadow: 0 0 0 2px var(--surface);
   }}
-  .tol-gauge-marker .tg-marker-label {{
-    position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
-    font-family: 'Russo One', system-ui, sans-serif; font-size: 13px;
-    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
-    padding: 3px 9px; white-space: nowrap;
-  }}
   .tol-gauge-ticklabels {{ position: relative; height: 30px; margin-top: 7px; }}
   .tg-tick-lbl {{ position: absolute; top: 0; display: flex; flex-direction: column; align-items: center; line-height: 1.15; white-space: nowrap; }}
   .tg-tick-lbl b {{ font-family: 'Russo One', system-ui, sans-serif; font-size: 12px; color: var(--bad); }}
   .tg-tick-lbl.doble b {{ color: var(--bad-dark); }}
   .tg-tick-lbl i {{ font-style: normal; font-size: 9px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); }}
-  .tol-gauge-scale {{ display: flex; justify-content: space-between; font-size: 9.5px; color: var(--ink-faint); margin-top: 2px; }}
+  .tol-gauge-scale {{ display: flex; justify-content: space-between; font-size: 13px; font-weight: 700;
+    font-family: 'Russo One', system-ui, sans-serif; color: var(--ink); margin-top: 4px; }}
+  /* Leyenda alineada de los 3 criterios debajo del gauge (Jorge, 2026-09-28) --
+     reemplaza las burbujas flotantes sobre la barra, que se pisaban si los
+     3 % quedaban cerca. */
+  .tol-gauge-valores {{ display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 12px; align-items: baseline; }}
+  .tg-leg-valor {{ display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-faint); }}
+  .tg-leg-valor i {{ display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }}
+  .tg-leg-valor b {{ font-family: 'Russo One', system-ui, sans-serif; font-size: 13px; color: var(--ink); }}
   .tol-gauge-legend {{ display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; }}
   .tg-leg {{ display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--ink-faint); }}
   .tg-leg i {{ display: inline-block; width: 14px; height: 0; border-top: 2px dashed; flex-shrink: 0; }}
