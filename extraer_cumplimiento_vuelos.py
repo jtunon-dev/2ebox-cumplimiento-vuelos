@@ -309,8 +309,19 @@ def noco_fetch_all(table_id, where="", fields="", page_size=1000):
             params += f"&fields={fields}"
         url = f"{NOCO_BASE_URL}/{NOCO_BASE}/{table_id}?{params}"
         req = urllib.request.Request(url, headers={"xc-token": NOCO_TOKEN})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = json.loads(r.read())
+        # Reintenta ante timeouts/errores transitorios de NocoDB (Jorge,
+        # 2026-09-28: la corrida de CI fallo 2 veces seguidas en el primer
+        # fetch por "read operation timed out" -- esta funcion no tenia
+        # reintentos, a diferencia de la version de extraer_rl.py).
+        for intento in range(4):
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    data = json.loads(r.read())
+                break
+            except Exception as e:
+                if intento == 3:
+                    raise
+                print(f"  reintento {intento + 1} tras error: {e}")
         batch = data.get("list", [])
         rows.extend(batch)
         total = data.get("pageInfo", {}).get("totalRows", 0)
