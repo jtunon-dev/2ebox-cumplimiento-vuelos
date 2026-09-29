@@ -193,7 +193,9 @@ a.lk:hover{text-decoration:underline}
 :root[data-theme="dark"] .b-media{background:#3A2A05;color:#F0C674}
 :root[data-theme="dark"] .b-baja,:root[data-theme="dark"] .b-warn{background:#3D1219;color:#FF8A9A}
 :root[data-theme="dark"] .b-pc{background:#16334F;color:#A7C5E1}
-table.ll-mx td{text-align:center;vertical-align:top;min-width:82px}
+table.ll-mx{width:auto}
+table.ll-mx td{text-align:center;vertical-align:middle;min-width:82px;border-left:1px solid var(--line)}
+table.ll-mx td:first-child{border-left:none}
 table.ll-mx td:first-child,table.ll-mx td:nth-child(2){text-align:left;white-space:nowrap}
 table.ll-mx .mes td{background:var(--surface-2);font-family:var(--font-display);font-size:11px;text-align:left}
 table.ll-mx .cv{display:block;line-height:1.25}
@@ -420,7 +422,8 @@ table.ll-mx .tot{color:var(--ink-faint);font-size:10.5px}
 
       <div class="panel">
         <h3>T3 · Matriz de subida de guías</h3>
-        <div class="sub">Una fila por vuelo (mes · AWB), columnas = día de la semana de subida al AWB (hora Chile). Cada celda: guías subidas ese día y, abajo, el % acumulado del total de ese vuelo hasta ese día.</div>
+        <div class="sub">Una fila por vuelo (mes · AWB), columnas = día de la semana de subida al AWB (hora Chile). Cada celda: guías (o kilos) subidos ese día y, abajo, el % acumulado del total de ese vuelo hasta ese día.</div>
+        <div class="metric-switch" id="ll-t3-sw"><button data-s="guias" class="on">Cantidad de guías</button><button data-s="kilos">Kilos</button></div>
         <div class="tbl-scroll" style="max-height:560px;overflow-y:auto"><table class="dt ll-mx" id="ll-t3"></table></div>
       </div>
 
@@ -1044,7 +1047,7 @@ const SEG_COLOR = {Natural:"#5691DF",Empresa:"#7B92A4",Carga:"#E0A100",MercadoLi
 const EJ_COLOR = {Kathy:"#E3203E",Tiare:"#5691DF","Sin ejecutiva":"#A7C5E1"};
 const LL_PAL = ["#E3203E","#5691DF","#2E9E6B","#E0A100","#152C4A","#B5651D","#7B92A4","#A7C5E1"];
 const LF = {vuelo:0, cas:"", ej:new Set(), seg:new Set(["Natural","Empresa","Carga"]), desde:"", hasta:"", per:"3m"};
-let LLG4BY="seg", LLG4M="kg", LLT5="pag";
+let LLG4BY="seg", LLG4M="kg", LLT5="pag", LLT3M="guias";
 
 const llDay = s => s ? Date.UTC(+s.slice(0,4),+s.slice(5,7)-1,+s.slice(8,10))/864e5 : null;
 const llHrs = s => s ? Date.UTC(+s.slice(0,4),+s.slice(5,7)-1,+s.slice(8,10),+s.slice(11,13)||0,+s.slice(14,16)||0)/36e5 : null;
@@ -1115,7 +1118,7 @@ function buildLLControls(){
     sel.value="0";cas.value="";chips("ll-ej",LL_EJS,LF.ej);chips("ll-seg",LL_SEGS,LF.seg);llSetPer("3m");renderLlenado();};
   const sw=(id,fn)=>document.getElementById(id).onclick=e=>{const b=e.target.closest("button");if(!b)return;
     document.querySelectorAll(`#${id} button`).forEach(x=>x.classList.toggle("on",x===b));fn(b);renderLlenado();};
-  sw("ll-g4-by",b=>LLG4BY=b.dataset.b); sw("ll-g4-m",b=>LLG4M=b.dataset.m); sw("ll-t5-sw",b=>LLT5=b.dataset.s);
+  sw("ll-g4-by",b=>LLG4BY=b.dataset.b); sw("ll-g4-m",b=>LLG4M=b.dataset.m); sw("ll-t5-sw",b=>LLT5=b.dataset.s); sw("ll-t3-sw",b=>LLT3M=b.dataset.s);
   // clic en un AWB o una casilla desde cualquier tabla -> filtra toda la sección
   document.getElementById("tab-llenado").addEventListener("click",e=>{
     const a=e.target.closest("a.lk");if(!a)return;
@@ -1231,12 +1234,13 @@ function renderLLT3(){
   // vuelo -- en la practica todo un vuelo se llena dentro de la misma semana.
   const porVuelo={};
   gs.forEach(g=>{
-    const d=llDay(g.asig);
+    const d=llDay(g.asig), n=LLT3M==="kilos"?g.kg:1;
     const o=(porVuelo[g.vid]=porVuelo[g.vid]||{dias:{},total:0,primerDia:d});
-    o.dias[d]=(o.dias[d]||0)+1; o.total++;
+    o.dias[d]=(o.dias[d]||0)+n; o.total+=n;
     if(d<o.primerDia)o.primerDia=d;
   });
   const vids=Object.keys(porVuelo).sort((a,b)=>porVuelo[b].primerDia-porVuelo[a].primerDia);
+  const fmt=LLT3M==="kilos"?fmt1:fmtN;
   let h="<thead><tr><th>Mes</th><th>Vuelo</th>"+["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(x=>`<th>${x}</th>`).join("")+"<th>Total</th></tr></thead><tbody>";
   let mes0="";
   vids.forEach(vid=>{
@@ -1251,9 +1255,9 @@ function renderLLT3(){
       if(!n){h+="<td></td>";continue;}
       acum+=n;
       const pct=o.total?Math.round(100*acum/o.total):0;
-      h+=`<td><span class="cv"><b>${n}</b><small>${pct}%</small></span></td>`;
+      h+=`<td><span class="cv"><b>${fmt(n)}</b><small>${pct}%</small></span></td>`;
     }
-    h+=`<td class="tot">${o.total}</td></tr>`;
+    h+=`<td class="tot">${fmt(o.total)}</td></tr>`;
   });
   t.innerHTML=h+"</tbody>";
 }
