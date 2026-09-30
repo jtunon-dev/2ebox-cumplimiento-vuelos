@@ -175,7 +175,21 @@ import urllib.parse
 import urllib.request
 from collections import defaultdict
 from datetime import datetime, date, timedelta, timezone
+from zoneinfo import ZoneInfo
 import statistics
+
+# Los horarios de corte (mas abajo) estan definidos en hora de Chile real --
+# los timestamps de NocoDB vienen en UTC autentico (confirmado 2026-09-30:
+# un pago que el admin 2ebox muestra como 14:25 Chile llega de la API como
+# "...18:25:33+00:00"). Antes de este fix, _corte()/_es_vuelo_lunes()
+# comparaban la hora cruda (UTC) contra el umbral como si ya fuera hora de
+# Chile -- el corte quedaba 3-4h mas temprano de lo real (segun horario de
+# verano), lo que hacia el sistema demasiado PERMISIVO: a varias guias les
+# asignaba un vuelo_esperado mas tardio del que de verdad alcanzaban, y por
+# lo tanto sub-contaba incidentes. Verificado contra los datos reales: bajo
+# el fix, 617 de 4.495 guias evaluables 2026 cambian de vuelo_esperado y el
+# % de afectadas del criterio "vuelo exacto" sube de 8,9% a 12,7%.
+CHILE_TZ = ZoneInfo("America/Santiago")
 
 # El token vive hardcodeado como default para que correr esto localmente
 # siga funcionando igual que siempre -- pero si hay una variable de entorno
@@ -230,15 +244,15 @@ ANIO_REPORTE = 2026
 # alcanzaron su vuelo) -- ver control_armado_dias_volaron_ok en el JSON.
 UMBRAL_ARMADO_LENTO_DIAS = 3
 # Corte para entrar al manifiesto de un vuelo (regla actualizada por Jorge,
-# 2026-09-03): la guia tiene que estar LISTA (pago + factura en Miami) a mas
-# tardar el DIA ANTERIOR al vuelo, hasta las 18:00. Si queda lista despues de
-# ese corte no alcanza ese manifiesto y le corresponde el vuelo siguiente.
-# (La regla anterior era 12:00 del MISMO dia del vuelo -- esta es mas estricta:
-# ahora hay que estar listo la vispera.)  Las horas se comparan en el mismo
-# reloj en que vienen los timestamps de la fuente (NocoDB, etiquetados UTC),
-# igual que la regla anterior.
+# 2026-09-30): la guia tiene que estar LISTA (pago + factura en Miami) a mas
+# tardar el DIA ANTERIOR al vuelo, hasta las 17:00 (5pm) HORA DE CHILE. Si
+# queda lista despues de ese corte no alcanza ese manifiesto y le corresponde
+# el vuelo siguiente. (Version anterior: 18:00, corregido por Jorge a las
+# 17:00 el 2026-09-30. Antes de eso, 12:00 del MISMO dia del vuelo.) Las
+# horas se comparan en hora de Chile real (ver CHILE_TZ) -- _corte() convierte
+# el timestamp crudo (UTC) antes de fijar la hora del corte.
 CORTE_MANIFIESTO_DIAS_ANTES = 1
-CORTE_MANIFIESTO_HORA = 18
+CORTE_MANIFIESTO_HORA = 17
 
 # --- "Vuelo del lunes" (Jorge, 2026-09-04/07) ---
 # Existe un vuelo de entrega tipica LUNES que en el sistema queda registrado
@@ -909,7 +923,11 @@ def main():
 
     def _es_vuelo_lunes(ts):
         # ver constantes arriba: entrega lunes, se despacha el viernes.
-        return ts.weekday() == 0 or (ts.weekday() == 4 and ts.hour >= VUELO_LUNES_VIERNES_HORA_MIN)
+        # Fix 2026-09-30: los timestamps llegan en UTC autentico -- hay que
+        # convertir a hora de Chile ANTES de mirar el dia de semana/hora,
+        # si no el limite de las 17:00 se evalua 3-4h antes de lo real.
+        ts_cl = ts.astimezone(CHILE_TZ)
+        return ts_cl.weekday() == 0 or (ts_cl.weekday() == 4 and ts_cl.hour >= VUELO_LUNES_VIERNES_HORA_MIN)
 
     def _retroceder_a(ts, weekday):
         x = ts
@@ -918,19 +936,21 @@ def main():
         return x
 
     def _corte(ts, correspondido):
-        # Corte de manifiesto de un vuelo. Regla base (Jorge, 2026-09-03): la
+        # Corte de manifiesto de un vuelo. Regla base (Jorge, 2026-09-30): la
         # guia tiene que estar lista (pago + factura) a mas tardar el dia
-        # ANTERIOR al vuelo, a las 18:00. Excepcion "vuelo del lunes" (Jorge,
-        # 2026-09-07): jueves 18:00 (oficial) o viernes 16:00 (correspondido).
+        # ANTERIOR al vuelo, a las 17:00 HORA DE CHILE. Excepcion "vuelo del
+        # lunes" (Jorge, 2026-09-07): jueves 18:00 (oficial) o viernes 16:00
+        # (correspondido) -- tambien en hora de Chile.
+        ts_cl = ts.astimezone(CHILE_TZ)
         if _es_vuelo_lunes(ts):
             if correspondido:
-                return _retroceder_a(ts, 4).replace(  # viernes de esa semana
+                return _retroceder_a(ts_cl, 4).replace(  # viernes de esa semana
                     hour=CORTE_LUNES_CORRESPONDIDO_HORA, minute=0, second=0, microsecond=0
                 )
-            return _retroceder_a(ts, 3).replace(  # jueves de esa semana
+            return _retroceder_a(ts_cl, 3).replace(  # jueves de esa semana
                 hour=CORTE_LUNES_OFICIAL_HORA, minute=0, second=0, microsecond=0
             )
-        return (ts - timedelta(days=CORTE_MANIFIESTO_DIAS_ANTES)).replace(
+        return (ts_cl - timedelta(days=CORTE_MANIFIESTO_DIAS_ANTES)).replace(
             hour=CORTE_MANIFIESTO_HORA, minute=0, second=0, microsecond=0
         )
 
@@ -1110,9 +1130,12 @@ def main():
             # Mes y dia de semana (0=lunes) en que la guia quedo LISTA -- usados
             # por el heatmap de cumplimiento de la pestaña Guias afectadas
             # (pedido de Jorge, 2026-09-07: que sea por el dia real en que
-            # quedo lista, no por el dia del vuelo que le tocaba).
-            "fl_mo": f"{fecha_lista.year}-{fecha_lista.month:02d}",
-            "fl_dow": fecha_lista.weekday(),
+            # quedo lista, no por el dia del vuelo que le tocaba). En hora de
+            # Chile (fix 2026-09-30, mismo motivo que _corte()): un dia de
+            # semana calculado sobre el timestamp UTC crudo puede caer un dia
+            # antes o despues del dia real en Chile.
+            "fl_mo": f"{fecha_lista.astimezone(CHILE_TZ).year}-{fecha_lista.astimezone(CHILE_TZ).month:02d}",
+            "fl_dow": fecha_lista.astimezone(CHILE_TZ).weekday(),
             "fecha_asignado_guia_madre": g["asignado"].isoformat() if g["asignado"] else None,
             "vuelo_esperado": esperado_ts.isoformat(),
             "vuelo_real": real_ts.isoformat() if real_ts else None,
