@@ -171,6 +171,7 @@ Se investigaron dos hipotesis con los datos:
 """
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 from collections import defaultdict
@@ -327,15 +328,18 @@ def noco_fetch_all(table_id, where="", fields="", page_size=1000):
         # 2026-09-28: la corrida de CI fallo 2 veces seguidas en el primer
         # fetch por "read operation timed out" -- esta funcion no tenia
         # reintentos, a diferencia de la version de extraer_rl.py).
-        for intento in range(4):
+        # 2026-10-17: NocoDB inestable -> mas intentos con espera creciente.
+        for intento in range(8):
             try:
                 with urllib.request.urlopen(req, timeout=60) as r:
                     data = json.loads(r.read())
                 break
             except Exception as e:
-                if intento == 3:
+                if intento == 7:
                     raise
-                print(f"  reintento {intento + 1} tras error: {e}")
+                espera = min(15 * 2 ** intento, 120)
+                print(f"  reintento {intento + 1} tras error: {e} (espera {espera}s)")
+                time.sleep(espera)
         batch = data.get("list", [])
         rows.extend(batch)
         total = data.get("pageInfo", {}).get("totalRows", 0)

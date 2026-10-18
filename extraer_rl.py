@@ -56,6 +56,7 @@ import math
 import os
 import re
 import statistics
+import time
 import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
@@ -144,15 +145,20 @@ def noco_fetch_all(table_id, where="", fields="", page_size=1000, label=""):
             params += f"&fields={fields}"
         url = f"{NOCO_URL}/{NOCO_BASE}/{table_id}?{params}"
         req = urllib.request.Request(url, headers={"xc-token": NOCO_TOKEN})
-        for intento in range(4):
+        # NocoDB a veces se cuelga o corta la conexion en una pagina suelta
+        # (2026-10-17: la CI se rindio tras 4 fallos seguidos en "puente").
+        # Mas intentos y con espera creciente para que el servidor se recupere.
+        for intento in range(8):
             try:
                 with urllib.request.urlopen(req, timeout=120) as r:
                     data = json.loads(r.read())
                 break
             except Exception as e:
-                if intento == 3:
+                if intento == 7:
                     raise
-                print(f"  {label} reintento {intento+1} tras error: {e}", flush=True)
+                espera = min(15 * 2 ** intento, 120)
+                print(f"  {label} reintento {intento+1} tras error: {e} (espera {espera}s)", flush=True)
+                time.sleep(espera)
         batch = data.get("list", [])
         rows.extend(batch)
         total = data.get("pageInfo", {}).get("totalRows", 0)
