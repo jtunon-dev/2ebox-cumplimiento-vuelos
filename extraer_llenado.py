@@ -44,15 +44,15 @@ if not NOCO_TOKEN:
         from extraer_datos import NOCO_TOKEN
     except ImportError:
         raise SystemExit("Falta la variable de entorno NOCO_TOKEN (secret del repo).")
-NOCO_BASE = "pifk61tmzhes073"
+NOCO_BASE = "pieqwzozec9vxkc"
 NOCO_URL = "https://noco.2ebox.com/api/v1/db/data/noco"
 
-TBL_CUMPLIMIENTO = "m4feao7xeudu8k9"
-TBL_GUIA_MADRES = "m5t0y2pg3d0qt7h"
-TBL_GUIA_MADRE_HIJAS = "mpwefzshqgun0m7"
-TBL_GUIA_HIJAS = "m4b0yh4lwpxsvri"
-TBL_CLIENTES = "mrog0ys27qhusnw"
-TBL_HIST = "mgzgcbyxeu7225b"   # guias_hijas_estados_historial
+TBL_CUMPLIMIENTO = "m25zr2du3yfvosb"
+TBL_GUIA_MADRES = "mq5v892tt8n5kmn"
+TBL_GUIA_MADRE_HIJAS = "m7e1clo8pmrb78t"
+TBL_GUIA_HIJAS = "mkrn30qhc4osr3v"
+TBL_CLIENTES = "mao19eha5re9oig"
+TBL_HIST = "m1d3u1dwhx3u63n"   # guias_hijas_estados_historial
 
 AWB_DESDE = "2025-07-01"      # vuelos analizados (historia para promedios)
 GUIAS_DESDE = "2025-04-01"    # guías: colchón antes del primer AWB analizado
@@ -91,7 +91,7 @@ def noco_fetch_all(table_id, where="", fields="", page_size=1000, label=""):
         if fields:
             params += f"&fields={fields}"
         req = urllib.request.Request(f"{NOCO_URL}/{NOCO_BASE}/{table_id}?{params}",
-                                     headers={"xc-token": NOCO_TOKEN})
+                                     headers={"xc-token": NOCO_TOKEN, "User-Agent": "2ebox-reporteria/1.0"})
         for intento in range(4):
             try:
                 with urllib.request.urlopen(req, timeout=180) as r:

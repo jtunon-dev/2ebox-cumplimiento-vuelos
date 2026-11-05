@@ -66,17 +66,17 @@ from pathlib import Path
 NOCO_TOKEN = os.environ.get("NOCO_TOKEN")
 if not NOCO_TOKEN:
     raise SystemExit("Falta la variable de entorno NOCO_TOKEN (secret del repo).")
-NOCO_BASE = "pifk61tmzhes073"
+NOCO_BASE = "pieqwzozec9vxkc"
 NOCO_URL = "https://noco.2ebox.com/api/v1/db/data/noco"
 
-TBL_CUMPLIMIENTO = "m4feao7xeudu8k9"
-TBL_GUIA_MADRES = "m5t0y2pg3d0qt7h"
-TBL_GUIA_MADRE_HIJAS = "mpwefzshqgun0m7"   # tabla puente M2M (system)
-TBL_GUIA_HIJAS = "m4b0yh4lwpxsvri"          # para venta (valores JSON + Instrucciones)
+TBL_CUMPLIMIENTO = "m25zr2du3yfvosb"
+TBL_GUIA_MADRES = "mq5v892tt8n5kmn"
+TBL_GUIA_MADRE_HIJAS = "m7e1clo8pmrb78t"   # tabla puente M2M (system)
+TBL_GUIA_HIJAS = "mkrn30qhc4osr3v"          # para venta (valores JSON + Instrucciones)
 # 2ebox_rentabilidad: 1 fila por guia (mismo universo que ebox_cumplimiento,
 # ~58k filas), trae NGuia / UnidadNegocio / Peso y responde rapido por la API
 # (el "reporte_rentabilidad" es una vista pesada: ~10s por pagina, no sirve).
-TBL_RENTABILIDAD = "m0pibgo29ydt3l1"
+TBL_RENTABILIDAD = "mz06ykuzdu96dms"
 
 FECHA_DESDE = "2023-01-01"
 OUT = Path(__file__).parent / "data"
@@ -144,7 +144,7 @@ def noco_fetch_all(table_id, where="", fields="", page_size=1000, label=""):
         if fields:
             params += f"&fields={fields}"
         url = f"{NOCO_URL}/{NOCO_BASE}/{table_id}?{params}"
-        req = urllib.request.Request(url, headers={"xc-token": NOCO_TOKEN})
+        req = urllib.request.Request(url, headers={"xc-token": NOCO_TOKEN, "User-Agent": "2ebox-reporteria/1.0"})
         # NocoDB a veces se cuelga o corta la conexion en una pagina suelta
         # (2026-10-17: la CI se rindio tras 4 fallos seguidos en "puente").
         # Mas intentos y con espera creciente para que el servidor se recupere.
@@ -428,7 +428,7 @@ def main():
     # 5. guias_hijas_estados_historial: primera fecha de "En Bodega 2ebox Chile"
     #    (id_estado 18) y "En Retencion" (id_estado 23) -- no estan en ebox_cumplimiento.
     print("[5/5] historial de estados (bodega CD / retencion) ...", flush=True)
-    TBL_HIST = "mgzgcbyxeu7225b"
+    TBL_HIST = "m1d3u1dwhx3u63n"
     n_min_hist = 109000
     bod_por_guia, ret_por_guia = {}, {}
     for est, dst in ((18, bod_por_guia), (23, ret_por_guia)):
@@ -611,9 +611,9 @@ def main():
 # Ver ultima_milla/extraer_ultima_milla.py (carpeta de desarrollo) para el
 # docstring completo de la metodología.
 # ============================================================================
-TBL_GUIA_HIJAS_UM = "m4b0yh4lwpxsvri"
-TBL_HIST_ESTADOS_UM = "mgzgcbyxeu7225b"
-TBL_DIRECCIONES_UM = "m4sgieddhip29md"
+TBL_GUIA_HIJAS_UM = "mkrn30qhc4osr3v"
+TBL_HIST_ESTADOS_UM = "m1d3u1dwhx3u63n"
+TBL_DIRECCIONES_UM = "m40fz82mkra2ag7"
 COURIER_UM = {2: "DropGo", 1: "Bluexpress"}
 EST_UM = {18: "en_bodega_cl", 20: "en_despacho", 21: "entregado",
           26: "reagendado", 28: "entrega_fallida", 29: "enviado_cd"}

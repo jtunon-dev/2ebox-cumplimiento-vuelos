@@ -1,5 +1,5 @@
 """Extrae de NocoDB (tabla dataconsolider.ebox_cumplimiento, espejada como
-`ebox_cumplimiento` en la base pifk61tmzhes073) las guias regulares del 2026
+`ebox_cumplimiento` en la base pieqwzozec9vxkc) las guias regulares del 2026
 y calcula, para cada una, si voló en el PRIMER vuelo que le correspondía o
 si se quedó fuera de él (y voló despues, o todavia no vuela).
 
@@ -203,11 +203,11 @@ if not NOCO_TOKEN:
         "Falta la variable de entorno NOCO_TOKEN. En GitHub Actions debe venir "
         "del secret del repo (Settings -> Secrets and variables -> Actions)."
     )
-NOCO_BASE = "pifk61tmzhes073"
+NOCO_BASE = "pieqwzozec9vxkc"
 NOCO_BASE_URL = "https://noco.2ebox.com/api/v1/db/data/noco"
-TBL_CUMPLIMIENTO = "m4feao7xeudu8k9"
-TBL_GUIA_HIJAS = "m4b0yh4lwpxsvri"
-TBL_GUIA_MADRES = "m5t0y2pg3d0qt7h"
+TBL_CUMPLIMIENTO = "m25zr2du3yfvosb"
+TBL_GUIA_HIJAS = "mkrn30qhc4osr3v"
+TBL_GUIA_MADRES = "mq5v892tt8n5kmn"
 # Tabla `consolidaciones` (registro del bulto armado en bodega): id, fob
 # (0 = se cerro el bulto con al menos una factura pendiente), fecha (creacion
 # del registro en sistema, al FINAL de la coordinacion por correo),
@@ -216,7 +216,8 @@ TBL_GUIA_MADRES = "m5t0y2pg3d0qt7h"
 # guia_hijas.consolidacion == consolidaciones.id. Usada para clasificar si el
 # atraso de una guia consolidada se explica por el propio proceso de
 # consolidacion (2026-09-02, T-0006).
-TBL_CONSOLIDACIONES = "mtz3g6ngt242ep9"
+TBL_CONSOLIDACIONES = "mlbfue5i0vrpb4g"
+TBL_VCONSOLIDACIONES = "mb7z578p9qjhho1"  # v_consolidaciones_guias: nguias por bulto
 # Tabla de union M2M interna que NocoDB genera para la relacion
 # guia_hijas.guia_madres <-> guia_madres.guia_hijas. No aparece en el listado
 # de tablas normal (es "system"), pero es consultable directo por id via la
@@ -224,7 +225,7 @@ TBL_CONSOLIDACIONES = "mtz3g6ngt242ep9"
 # /api/v1/db/meta/tables/{TBL_GUIA_HIJAS} -> columna "guia_madres" ->
 # colOptions.fk_mm_model_id. Si esto alguna vez deja de responder (cambio de
 # esquema en NocoDB), volver a sacar el id desde ahi.
-TBL_GUIA_MADRE_HIJAS = "mpwefzshqgun0m7"
+TBL_GUIA_MADRE_HIJAS = "m7e1clo8pmrb78t"
 
 FIELDS = (
     "n_guia,casilla,id_estado,fecha_ingreso,fecha_primer_pago,fecha_miami_con_factura,"
@@ -323,7 +324,7 @@ def noco_fetch_all(table_id, where="", fields="", page_size=1000):
         if fields:
             params += f"&fields={fields}"
         url = f"{NOCO_BASE_URL}/{NOCO_BASE}/{table_id}?{params}"
-        req = urllib.request.Request(url, headers={"xc-token": NOCO_TOKEN})
+        req = urllib.request.Request(url, headers={"xc-token": NOCO_TOKEN, "User-Agent": "2ebox-reporteria/1.0"})
         # Reintenta ante timeouts/errores transitorios de NocoDB (Jorge,
         # 2026-09-28: la corrida de CI fallo 2 veces seguidas en el primer
         # fetch por "read operation timed out" -- esta funcion no tenia
@@ -808,11 +809,17 @@ def main():
         where="(fecha,ge,exactDate,2025-11-01)",
         fields="id,fob,fecha,peso,estado,consolidaciones_guias",
     )
+    # Noco nuevo (2026-11-05): consolidaciones_guias llega como LISTA truncada
+    # a 25; el conteo exacto sale de v_consolidaciones_guias.nguias ("123|456|...").
+    nguias_cons = {
+        r["id"]: len([x for x in (r.get("nguias") or "").split("|") if x])
+        for r in noco_fetch_all(TBL_VCONSOLIDACIONES, where="(fecha,ge,exactDate,2025-11-01)", fields="id,nguias")
+    }
     cons_info = {
         r["id"]: {
             "fob": r.get("fob"),
             "fecha": parse_dt(r.get("fecha")),
-            "n_guias": r.get("consolidaciones_guias") or 0,
+            "n_guias": nguias_cons.get(r["id"]) or 0,
             "estado": r.get("estado"),
         }
         for r in filas_cons
@@ -838,7 +845,10 @@ def main():
             # (pedido de Jorge, 2026-09-03: el vuelo 605-00715831 tiene 56
             # guias / 436,9 kg en el sistema y salia 50 / 222 kg en la tabla,
             # inflando el excedente).
-            "n_guias_real": r.get("guia_hijas") or r.get("items") or 0,
+            # Noco nuevo (2026-11-05): guia_hijas llega como LISTA truncada a 25; el
+            # conteo real es `items` (antes guia_hijas era el conteo).
+            "n_guias_real": (r.get("guia_hijas") if isinstance(r.get("guia_hijas"), int)
+                             else r.get("items")) or 0,
             "kg_total": r.get("peso_total") or 0,
         }
         for r in filas_madres
